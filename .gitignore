@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# 로컬 데이터 (DB는 %LOCALAPPDATA%\TimeTracker 에 생성되므로 보통 포함 안 됨)
+*.db
+*.sqlite
+
+# OS
+Thumbs.db
+desktop.ini
+
+# 임시/테스트
+_*.py
+_shot.png
