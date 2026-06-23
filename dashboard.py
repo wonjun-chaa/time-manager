@@ -4,40 +4,42 @@ dashboard.py - 업무시간 현황 GUI (tkinter, 추가 설치 불필요)
 py dashboard.py        # 콘솔과 함께 실행 (디버그)
 pythonw dashboard.py   # 콘솔 없이 GUI 만 (트레이 메뉴가 이 방식으로 실행)
 
-다크 테마 카드 UI + 주간 막대그래프 + 5초 자동 새로고침.
+따뜻한 라이트(미니멀) 테마 카드 UI + 주간 막대그래프 + 5초 자동 새로고침.
 위젯은 한 번만 생성하고 값만 갱신하므로 새로고침 시 깜빡임이 없다.
 """
 
 import tkinter as tk
+from tkinter import font as tkfont
 from datetime import date, datetime, timedelta
 
 from PIL import Image, ImageDraw, ImageTk
 
 import storage as S
 
-# ----- 색상/폰트 테마 -----
-BG = "#1b1f2e"
-CARD = "#262b3d"
-CARD2 = "#2f3650"
-HOVER = "#3a4365"   # 접기/펴기 바 마우스 오버 색
-FG = "#e8ecf5"
-SUB = "#9aa3bd"
-ACCENT = "#78c8ff"
-TODAY = "#ffce6b"
-GOOD = "#7ee0a8"
+# ----- 색상/폰트 테마 (Manus 풍 따뜻한 라이트 미니멀) -----
+BG = "#F4F1EA"      # 따뜻한 크림 배경
+CARD = "#FFFFFF"    # 카드 표면
+CARD2 = "#EFEBE0"   # 보조 표면 / 트랙 / 칩
+HOVER = "#E7E1D2"   # 마우스 오버
+BORDER = "#E6E1D4"  # 카드/구분 테두리
+FG = "#26282E"      # 본문 (따뜻한 차콜)
+SUB = "#8C887E"     # 보조 텍스트
+ACCENT = "#5B5BD6"  # 포인트 (바이올렛/인디고)
+TODAY = "#D98E4A"   # 오늘 강조 (테라코타)
+GOOD = "#2F9E6B"    # 양호 / 업무중 / 저장 (세이지)
 
-# 토글 스위치 색 (너무 밝지 않게 차분하게)
-TOGGLE_ON = "#3f8f66"    # 켜짐 트랙 - 가라앉은 초록
-TOGGLE_OFF = "#39404f"   # 꺼짐 트랙 - 어두운 회색
-TOGGLE_KNOB = "#dfe3ec"  # knob - 부드러운 회백색
+# 토글 스위치 색
+TOGGLE_ON = "#3FA06B"    # 켜짐 트랙 - 세이지 그린
+TOGGLE_OFF = "#CFC9BB"   # 꺼짐 트랙 - 웜 그레이
+TOGGLE_KNOB = "#FFFFFF"  # knob
 # 비활성(편집 잠금) 상태 색 - 흐리게
-TOGGLE_ON_DIS = "#34493f"
-TOGGLE_OFF_DIS = "#2c313c"
-TOGGLE_KNOB_DIS = "#737a8c"
+TOGGLE_ON_DIS = "#BBD7C6"
+TOGGLE_OFF_DIS = "#E2DCCF"
+TOGGLE_KNOB_DIS = "#F6F3EC"
 
 # 휴가/출장 색
-VAC = "#9b8cff"          # 휴가 - 라벤더
-TRIP = "#5cc0a0"         # 출장 - 청록
+VAC = "#7C6CE0"          # 휴가 - 라벤더
+TRIP = "#2FA08A"         # 출장 - 청록
 
 WEEKDAYS_SHOWN = 5       # 주간 표시 일수 (월~금, 토·일 제외)
 
@@ -93,9 +95,9 @@ class Stepper:
 
     def _btn(self, text, cmd):
         return tk.Button(
-            self.frame, text=text, command=cmd, font=(FONT, 10, "bold"),
-            width=1, bg=CARD2, fg=SUB,
-            activebackground=ACCENT, activeforeground=BG,
+            self.frame, text=text, command=cmd, font=(FONT, 11, "bold"),
+            width=1, bg=CARD2, fg=ACCENT,
+            activebackground=ACCENT, activeforeground="#FFFFFF",
             relief="flat", bd=0, padx=2, pady=0, cursor="hand2", takefocus=0,
         )
 
@@ -204,6 +206,62 @@ class ToggleSwitch:
             self.var.set(not bool(self.var.get()))
 
 
+class RoundButton:
+    """둥근(pill) 모서리의 플랫 버튼. Canvas 에 라운드 사각형 + 네이티브 텍스트.
+
+    tk.Button 은 모서리를 둥글릴 수 없어, 라운드 배경은 Canvas 로 그리고
+    한글 텍스트는 Canvas text 로(선명) 올린다. 호버 시 배경색만 바뀐다.
+    set_text / set_state 로 라벨·색을 나중에 바꿀 수 있다(요일 버튼 등).
+    """
+
+    def __init__(self, parent, text, command, *, fg, fill, hover, bg,
+                 font=(FONT, 10, "bold"), padx=16, pady=7, radius=11):
+        self.command = command
+        self.fg, self.fill, self.hover, self.bg = fg, fill, hover, bg
+        self.padx, self.pady, self.radius = padx, pady, radius
+        self.font = font
+        self._text = text
+        weight = "bold" if (len(font) > 2 and font[2] == "bold") else "normal"
+        self._fnt = tkfont.Font(family=font[0], size=font[1], weight=weight)
+        self.canvas = tk.Canvas(parent, bg=bg, highlightthickness=0, bd=0, cursor="hand2")
+        self._draw(self.fill)
+        self.canvas.bind("<Button-1>", lambda e: self.command() if self.command else None)
+        self.canvas.bind("<Enter>", lambda e: self._draw(self.hover))
+        self.canvas.bind("<Leave>", lambda e: self._draw(self.fill))
+
+    def _round(self, x0, y0, x1, y1, r, **kw):
+        pts = [
+            x0 + r, y0, x1 - r, y0, x1, y0, x1, y0 + r,
+            x1, y1 - r, x1, y1, x1 - r, y1, x0 + r, y1,
+            x0, y1, x0, y1 - r, x0, y0 + r, x0, y0,
+        ]
+        return self.canvas.create_polygon(pts, smooth=True, **kw)
+
+    def _draw(self, fill):
+        c = self.canvas
+        c.delete("all")
+        lines = self._text.split("\n")
+        tw = max(self._fnt.measure(ln) for ln in lines)
+        lh = self._fnt.metrics("linespace")
+        w = tw + self.padx * 2
+        h = lh * len(lines) + self.pady * 2
+        c.configure(width=w, height=h)
+        self._round(0, 0, w, h, self.radius, fill=fill, outline="")
+        c.create_text(
+            w / 2, h / 2, text=self._text, fill=self.fg,
+            font=self.font, justify="center",
+        )
+
+    def set_text(self, text):
+        if text != self._text:
+            self._text = text
+            self._draw(self.fill)
+
+    def set_state(self, *, fill, fg, hover):
+        self.fill, self.fg, self.hover = fill, fg, hover
+        self._draw(fill)
+
+
 class Dashboard:
     def __init__(self):
         self.root = tk.Tk()
@@ -238,26 +296,29 @@ class Dashboard:
         f = (FONT, size, "bold") if bold else (FONT, size)
         return tk.Label(parent, text=text, fg=fg, bg=bg, font=f, anchor="w")
 
-    def _card(self, parent, pad=10):
-        c = tk.Frame(parent, bg=CARD)
-        c.pack(fill="x", pady=(0, 8))
+    def _card(self, parent, pad=12):
+        c = tk.Frame(
+            parent, bg=CARD,
+            highlightthickness=1, highlightbackground=BORDER, highlightcolor=BORDER,
+        )
+        c.pack(fill="x", pady=(0, 10))
         inner = tk.Frame(c, bg=CARD)
         inner.pack(fill="x", padx=pad, pady=pad)
         return inner
 
-    # ----- 탭바 (현황 / 설정) -----
+    # ----- 탭바 (현황 / 설정) : 라운드 세그먼트 -----
     def _build_tabs(self):
         bar = tk.Frame(self.root, bg=BG)
-        bar.pack(fill="x", padx=18, pady=(14, 0))
+        bar.pack(fill="x", padx=18, pady=(16, 2))
         self._tab_btns = {}
         for key, label in [("dash", "현황"), ("settings", "설정")]:
-            b = tk.Label(
-                bar, text=label, font=(FONT, 11, "bold"),
-                bg=BG, fg=SUB, padx=14, pady=6, cursor="hand2",
+            rb = RoundButton(
+                bar, label, lambda k=key: self._show_tab(k),
+                fg=SUB, fill=BG, hover=HOVER, bg=BG,
+                font=(FONT, 11, "bold"), padx=18, pady=7, radius=13,
             )
-            b.pack(side="left", padx=(0, 6))
-            b.bind("<Button-1>", lambda e, k=key: self._show_tab(k))
-            self._tab_btns[key] = b
+            rb.canvas.pack(side="left", padx=(0, 4))
+            self._tab_btns[key] = rb
 
         # 탭 내용 컨테이너 + 두 프레임 (한 번만 생성, pack/forget 로 전환)
         self.container = tk.Frame(self.root, bg=BG)
@@ -270,9 +331,11 @@ class Dashboard:
         self.settings_frame.pack_forget()
         frame = self.dash_frame if key == "dash" else self.settings_frame
         frame.pack(fill="both", expand=True)
-        for k, b in self._tab_btns.items():
-            active = (k == key)
-            b.config(fg=(ACCENT if active else SUB), bg=(CARD if active else BG))
+        for k, rb in self._tab_btns.items():
+            if k == key:
+                rb.set_state(fill=CARD, fg=ACCENT, hover=CARD)
+            else:
+                rb.set_state(fill=BG, fg=SUB, hover=HOVER)
 
     # ----- 현황 레이아웃 1회 생성 -----
     def _build_dashboard(self, parent):
@@ -448,14 +511,13 @@ class Dashboard:
         row.pack(fill="x")
         self.leave_btns = []
         for i in range(WEEKDAYS_SHOWN):
-            b = tk.Button(
-                row, text="", font=(FONT, 9, "bold"), width=10,
-                bg=CARD2, fg=SUB, activebackground=HOVER, activeforeground=FG,
-                relief="flat", bd=0, padx=2, pady=6, cursor="hand2",
-                command=lambda i=i: self._cycle_leave(i),
+            rb = RoundButton(
+                row, " ", lambda i=i: self._cycle_leave(i),
+                fg=FG, fill=CARD2, hover=HOVER, bg=CARD,
+                font=(FONT, 9, "bold"), padx=10, pady=7, radius=10,
             )
-            b.pack(side="left", padx=(0, 6))
-            self.leave_btns.append(b)
+            rb.canvas.pack(side="left", padx=(0, 6))
+            self.leave_btns.append(rb)
 
     def _cycle_leave(self, i):
         monday, _ = S.week_range(date.today())
@@ -480,13 +542,12 @@ class Dashboard:
         self.root.minsize(rw, h)
 
     def _adj_btn(self, parent, text, cmd, fg):
-        b = tk.Button(
-            parent, text=text, command=cmd, font=(FONT, 9, "bold"),
-            bg=CARD2, fg=fg, activebackground=BG, activeforeground=fg,
-            relief="flat", bd=0, padx=10, pady=3, cursor="hand2",
+        rb = RoundButton(
+            parent, text, cmd, fg=fg, fill=CARD2, hover=HOVER, bg=CARD,
+            font=(FONT, 9, "bold"), padx=13, pady=5, radius=9,
         )
-        b.pack(side="left", padx=(0, 6))
-        return b
+        rb.canvas.pack(side="left", padx=(0, 6))
+        return rb
 
     @staticmethod
     def _fmt_adjust(sec: int) -> str:
@@ -578,9 +639,15 @@ class Dashboard:
         # 편집 / 저장 / 취소 버튼 바
         btnbar = tk.Frame(root, bg=BG)
         btnbar.pack(fill="x", pady=(6, 0))
-        self.btn_edit = self._settings_btn(btnbar, "편집", self._enter_edit, ACCENT)
-        self.btn_save = self._settings_btn(btnbar, "저장", self._save_edit, GOOD)
-        self.btn_cancel = self._settings_btn(btnbar, "취소", self._cancel_edit, SUB)
+        self.btn_edit = self._settings_btn(
+            btnbar, "편집", self._enter_edit, fill=ACCENT, fg="#FFFFFF", hover="#4A4AC4"
+        )
+        self.btn_save = self._settings_btn(
+            btnbar, "저장", self._save_edit, fill=GOOD, fg="#FFFFFF", hover="#27875B"
+        )
+        self.btn_cancel = self._settings_btn(
+            btnbar, "취소", self._cancel_edit, fill=CARD2, fg=SUB, hover=HOVER
+        )
         self.lbl_saved = self._label(btnbar, fg=SUB, size=9, bg=BG)
         self.lbl_saved.pack(side="right")
 
@@ -588,11 +655,10 @@ class Dashboard:
         self.var_idle.trace_add("write", lambda *a: self._sync_idle_state())
         self._set_edit_mode(False)   # 시작은 잠금 상태
 
-    def _settings_btn(self, parent, text, cmd, fg):
-        return tk.Button(
-            parent, text=text, command=cmd, font=(FONT, 10, "bold"),
-            bg=CARD2, fg=fg, activebackground=HOVER, activeforeground=fg,
-            relief="flat", bd=0, padx=16, pady=5, cursor="hand2",
+    def _settings_btn(self, parent, text, cmd, *, fill, fg, hover):
+        return RoundButton(
+            parent, text, cmd, fg=fg, fill=fill, hover=hover, bg=BG,
+            font=(FONT, 10, "bold"), padx=18, pady=6, radius=11,
         )
 
     def _setting_check(self, card, var, title, desc):
@@ -611,13 +677,13 @@ class Dashboard:
             sw.set_enabled(editing)
         self._sync_idle_state()
         if editing:
-            self.btn_edit.pack_forget()
-            self.btn_save.pack(side="left", padx=(0, 6))
-            self.btn_cancel.pack(side="left")
+            self.btn_edit.canvas.pack_forget()
+            self.btn_save.canvas.pack(side="left", padx=(0, 6))
+            self.btn_cancel.canvas.pack(side="left")
         else:
-            self.btn_save.pack_forget()
-            self.btn_cancel.pack_forget()
-            self.btn_edit.pack(side="left")
+            self.btn_save.canvas.pack_forget()
+            self.btn_cancel.canvas.pack_forget()
+            self.btn_edit.canvas.pack(side="left")
 
     def _enter_edit(self):
         # 취소 대비 현재(저장된) 값 스냅샷
@@ -760,11 +826,14 @@ class Dashboard:
             btn = self.leave_btns[i]
             label = f"{WEEKDAY[d.weekday()]} {d:%m.%d}"
             if leave == "vacation":
-                btn.config(text=f"{label}\n휴가", fg=BG, bg=VAC, activebackground=VAC)
+                btn.set_text(f"{label}\n휴가")
+                btn.set_state(fill=VAC, fg="#FFFFFF", hover=VAC)
             elif leave == "trip":
-                btn.config(text=f"{label}\n출장", fg=BG, bg=TRIP, activebackground=TRIP)
+                btn.set_text(f"{label}\n출장")
+                btn.set_state(fill=TRIP, fg="#FFFFFF", hover=TRIP)
             else:
-                btn.config(text=f"{label}\n근무", fg=SUB, bg=CARD2, activebackground=HOVER)
+                btn.set_text(f"{label}\n근무")
+                btn.set_state(fill=CARD2, fg=FG, hover=HOVER)
 
         worked_days = sum(1 for s in day_secs if s > 0)
         avg = week_total / worked_days if worked_days else 0
