@@ -40,7 +40,7 @@ SPI_GETSCREENSAVERRUNNING = 0x0072
 
 HEARTBEAT_SEC = 30          # 활동 중 마지막 활동시각 저장 주기
 POLL_SEC = 2               # 화면보호기/자리비움 감지 주기
-IDLE_THRESHOLD_SEC = 180   # 입력 없음 3분 이상이면 자리비움으로 간주
+IDLE_THRESHOLD_SEC = 180   # 입력 없음 임계 기본값(초). 실제 값은 설정에서 읽음
 
 
 def screensaver_running() -> bool:
@@ -71,11 +71,14 @@ class Tracker:
     def __init__(self):
         self.lock = threading.Lock()
         self.storage = S.Storage()
+        # 물리적 상태(실제로 잠겼는지 등) - 켜고 끄는 여부와 무관하게 그대로 기록.
         self.locked = False
         self.screensaver = False
         self.idle = False
         self.manual_pause = False
         self.active = False
+        # 카운팅 방식 설정 (대시보드에서 변경 가능, 폴링 시 갱신)
+        self.settings = self.storage.get_settings()
 
         # 직전 비정상 종료 복구
         recovered = self.storage.recover_unclean_shutdown()
@@ -87,19 +90,46 @@ class Tracker:
             self.active = True
             self.storage.touch_heartbeat()
 
+    def _effective_pause(self) -> bool:
+        """현재 설정을 반영한 '유효 일시정지' 여부.
+
+        물리적으로 잠겨 있어도 해당 감지 방식이 꺼져 있으면 일시정지로 치지 않는다.
+        수동 일시정지는 설정과 무관하게 항상 적용된다.
+        """
+        s = self.settings
+        return (
+            self.manual_pause
+            or (self.locked and s["lock_enabled"])
+            or (self.screensaver and s["screensaver_enabled"])
+            or (self.idle and s["idle_enabled"])
+        )
+
+    def _apply_locked(self, stop_reason: str, start_reason: str):
+        """self.lock 을 보유한 상태에서 active 전환을 반영한다."""
+        should_be_active = not self._effective_pause()
+        if should_be_active and not self.active:
+            self.storage.add_event("start", start_reason)
+            self.active = True
+            self.storage.touch_heartbeat()
+        elif not should_be_active and self.active:
+            self.storage.add_event("stop", stop_reason)
+            self.active = False
+
     def _recompute(self, stop_reason: str, start_reason: str):
         """상태 변화에 따라 start/stop 경계 이벤트를 발생시킨다."""
         with self.lock:
-            should_be_active = not (
-                self.locked or self.screensaver or self.idle or self.manual_pause
-            )
-            if should_be_active and not self.active:
-                self.storage.add_event("start", start_reason)
-                self.active = True
-                self.storage.touch_heartbeat()
-            elif not should_be_active and self.active:
-                self.storage.add_event("stop", stop_reason)
-                self.active = False
+            self._apply_locked(stop_reason, start_reason)
+
+    def refresh_settings(self) -> dict:
+        """설정을 DB 에서 다시 읽어 반영한다(대시보드에서 바뀐 값 포함).
+
+        켜짐→꺼짐 등으로 유효 일시정지 상태가 바뀌면 경계 이벤트를 발생시킨다.
+        갱신된 설정 dict 를 반환한다.
+        """
+        with self.lock:
+            self.settings = self.storage.get_settings()
+            self._apply_locked("settings_change", "settings_change")
+            return dict(self.settings)
 
     # 이벤트 핸들러
     def on_lock(self):
@@ -134,14 +164,21 @@ class Tracker:
                 self.storage.touch_heartbeat()
 
     def summary(self):
-        """(오늘 업무초, 이번주 업무초) - DB 1회 조회로 함께 계산."""
+        """(오늘 업무초, 이번주 업무초) - 수기 보정/휴가·출장 반영, 주간은 월~금만."""
         from datetime import timedelta
         ivs = self.storage.intervals()
-        today = S.seconds_for_day(ivs, date.today())
-        monday, _ = S.week_range(date.today())
-        week = sum(
-            S.seconds_for_day(ivs, monday + timedelta(days=i)) for i in range(7)
-        )
+        td = date.today()
+        monday, _ = S.week_range(td)
+
+        def work(day):
+            return S.split_for_day(
+                ivs, day,
+                self.storage.get_adjust_seconds(day),
+                self.storage.get_leave(day),
+            )[0]
+
+        today = work(td)
+        week = sum(work(monday + timedelta(days=i)) for i in range(5))  # 월~금
         return today, week
 
     def today_seconds(self) -> float:
@@ -149,13 +186,14 @@ class Tracker:
 
     def status_text(self) -> str:
         today, week = self.summary()
+        s = self.settings
         if self.manual_pause:
             state = "수동 일시정지"
-        elif self.locked:
+        elif self.locked and s["lock_enabled"]:
             state = "잠금(일시정지)"
-        elif self.screensaver:
+        elif self.screensaver and s["screensaver_enabled"]:
             state = "화면보호기(일시정지)"
-        elif self.idle:
+        elif self.idle and s["idle_enabled"]:
             state = "자리비움(일시정지)"
         else:
             state = "업무 중"
@@ -230,14 +268,19 @@ class App:
         prev_idle = False
         last_hb = 0.0
         while not self._stopping:
-            # 화면보호기 상태 변화 감지
+            # 설정 갱신(대시보드에서 켜고/끄거나 시간을 바꾼 값 반영).
+            # 방식이 꺼지면 여기서 유효 일시정지가 풀려 카운팅이 재개된다.
+            settings = self.tracker.refresh_settings()
+
+            # 화면보호기 상태 변화 감지 (물리적 상태는 항상 추적)
             ss = screensaver_running()
             if ss != prev_ss:
                 self.tracker.on_screensaver(ss)
                 prev_ss = ss
 
-            # 자리비움(입력 없음) 감지 - 3분 임계값
-            is_idle = idle_seconds() >= IDLE_THRESHOLD_SEC
+            # 자리비움(입력 없음) 감지 - 임계값은 설정에서
+            threshold = settings.get("idle_threshold_sec", IDLE_THRESHOLD_SEC)
+            is_idle = idle_seconds() >= threshold
             if is_idle != prev_idle:
                 self.tracker.on_idle(is_idle)
                 prev_idle = is_idle

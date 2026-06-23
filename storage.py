@@ -18,6 +18,40 @@ from datetime import datetime, timedelta, date, time
 
 APP_NAME = "TimeTracker"
 
+# 카운팅 방식 설정 (meta 테이블에 'setting:<key>' 로 저장).
+# 트레이 앱과 대시보드(별도 프로세스)가 DB 를 통해 공유하므로,
+# 대시보드에서 바꾼 값이 트레이 앱 폴링 주기 내에 반영된다.
+SETTING_PREFIX = "setting:"
+DEFAULT_SETTINGS = {
+    "idle_enabled": True,         # 자리비움(미입력) 감지로 일시정지
+    "idle_threshold_sec": 180,    # 미입력 임계 시간(초). 기본 3분
+    "lock_enabled": True,         # 화면 잠금으로 일시정지
+    "screensaver_enabled": True,  # 화면보호기로 일시정지
+}
+
+
+# 날짜별 비업무시간 수기 보정 (meta 테이블 'adjust:<날짜>')
+ADJUST_PREFIX = "adjust:"
+
+# 날짜별 휴가/출장 표시 (meta 'leave:<날짜>' = 'vacation'|'trip').
+# 표시된 날은 실제 기록과 무관하게 LEAVE_DEFAULT_SEC(8시간)으로 채운다.
+LEAVE_PREFIX = "leave:"
+LEAVE_LABELS = {"vacation": "휴가", "trip": "출장"}
+LEAVE_DEFAULT_SEC = 8 * 3600
+
+
+def _coerce_setting(key: str, raw: str):
+    """meta 에 저장된 문자열을 기본값 타입에 맞게 변환."""
+    default = DEFAULT_SETTINGS[key]
+    if isinstance(default, bool):
+        return raw == "1"
+    if isinstance(default, int):
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return default
+    return raw
+
 
 def data_dir() -> str:
     base = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
@@ -105,6 +139,59 @@ class Storage:
     def last_active(self) -> datetime | None:
         v = self.get_meta("last_active")
         return _parse(v) if v else None
+
+    # ----- 카운팅 방식 설정 -----
+    def get_settings(self) -> dict:
+        """저장된 설정을 기본값과 병합해 dict 로 반환 (없으면 기본값)."""
+        out = dict(DEFAULT_SETTINGS)
+        for k in DEFAULT_SETTINGS:
+            v = self.get_meta(SETTING_PREFIX + k)
+            if v is not None:
+                out[k] = _coerce_setting(k, v)
+        return out
+
+    def set_setting(self, key: str, value):
+        if key not in DEFAULT_SETTINGS:
+            raise KeyError(f"unknown setting: {key}")
+        if isinstance(value, bool):
+            raw = "1" if value else "0"
+        elif isinstance(value, int):
+            raw = str(value)
+        else:
+            raw = str(value)
+        self.set_meta(SETTING_PREFIX + key, raw)
+
+    # ----- 비업무시간 수기 보정 (날짜별) -----
+    # meta 테이블에 'adjust:YYYY-MM-DD' = 부호 있는 초. 양수면 비업무를 늘려
+    # 그만큼 업무시간을 줄이고, 음수면 반대로 작용한다.
+    def get_adjust_seconds(self, day: date) -> int:
+        v = self.get_meta(ADJUST_PREFIX + day.isoformat())
+        try:
+            return int(v) if v is not None else 0
+        except (TypeError, ValueError):
+            return 0
+
+    def set_adjust_seconds(self, day: date, seconds: int):
+        self.set_meta(ADJUST_PREFIX + day.isoformat(), str(int(seconds)))
+
+    def add_adjust_seconds(self, day: date, delta: int) -> int:
+        new = self.get_adjust_seconds(day) + int(delta)
+        self.set_adjust_seconds(day, new)
+        return new
+
+    # ----- 휴가/출장 표시 (날짜별) -----
+    def get_leave(self, day: date) -> str | None:
+        v = self.get_meta(LEAVE_PREFIX + day.isoformat())
+        return v if v in LEAVE_LABELS else None
+
+    def set_leave(self, day: date, kind: str | None):
+        """kind 가 'vacation'/'trip' 이면 표시, 그 외(None 등)면 표시 해제."""
+        key = LEAVE_PREFIX + day.isoformat()
+        if kind in LEAVE_LABELS:
+            self.set_meta(key, kind)
+        else:
+            self.conn.execute("DELETE FROM meta WHERE key=?", (key,))
+            self.conn.commit()
 
     # ----- 시작 시 비정상 종료 복구 -----
     def recover_unclean_shutdown(self) -> datetime | None:
@@ -197,8 +284,38 @@ def day_bounds(intervals, day: date):
     return first, last
 
 
+def stay_seconds(intervals, day: date) -> float:
+    """해당 날짜의 체류시간(첫 활동~마지막 활동) 초. 기록 없으면 0."""
+    first, last = day_bounds(intervals, day)
+    if first is None:
+        return 0.0
+    return max(0.0, (last - first).total_seconds())
+
+
+def split_for_day(intervals, day: date, adjust_sec: float = 0.0,
+                  leave_kind: str | None = None):
+    """해당 날짜의 (실 업무초, 비업무초) 를 보정값을 반영해 반환.
+
+    휴가/출장으로 표시된 날(leave_kind)은 실제 기록과 무관하게
+    (8시간, 0) 으로 채운다.
+
+    그 외에는 비업무 = 체류 - 업무. 수기 보정(adjust_sec, 부호 있음)은 비업무에
+    더해지고, 그만큼 업무에서 빠진다. 업무+비업무 = 체류 불변식을 유지하며
+    [0, 체류] 범위로 클립한다.
+    """
+    if leave_kind in LEAVE_LABELS:
+        return float(LEAVE_DEFAULT_SEC), 0.0
+    base_work = seconds_for_day(intervals, day)
+    stay = stay_seconds(intervals, day)
+    base_nonwork = max(0.0, stay - base_work)
+    nonwork = min(max(0.0, base_nonwork + adjust_sec), stay)
+    work = stay - nonwork
+    return work, nonwork
+
+
 def fmt_hm(seconds: float) -> str:
     seconds = int(seconds)
     h = seconds // 3600
     m = (seconds % 3600) // 60
-    return f"{h}시간 {m}분"
+    # 0시간은 표기하지 않는다 (예: 34분, 2시간 5분)
+    return f"{h}시간 {m}분" if h else f"{m}분"
