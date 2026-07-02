@@ -8,12 +8,19 @@ pythonw dashboard.py   # 콘솔 없이 GUI 만 (트레이 메뉴가 이 방식�
 위젯은 한 번만 생성하고 값만 갱신하므로 새로고침 시 깜빡임이 없다.
 """
 
+import os
+import subprocess
 import tkinter as tk
+import tkinter.font as tkfont
+from tkinter import filedialog
+import ctypes
+from ctypes import wintypes
 from datetime import date, datetime, timedelta
 
 from PIL import Image, ImageDraw, ImageTk
 
 import storage as S
+import export as EXP
 
 # ----- 색상/폰트 테마 -----
 BG = "#1b1f2e"
@@ -52,6 +59,60 @@ BAR_MAX = 300     # 막대 최대 길이
 VAL_W = 96        # 막대 오른쪽 시간 숫자 영역
 CHART_W = BAR_X0 + BAR_MAX + VAL_W
 ROW_H = 26
+
+
+class _LOGFONTW(ctypes.Structure):
+    _fields_ = [
+        ("lfHeight", wintypes.LONG), ("lfWidth", wintypes.LONG),
+        ("lfEscapement", wintypes.LONG), ("lfOrientation", wintypes.LONG),
+        ("lfWeight", wintypes.LONG), ("lfItalic", wintypes.BYTE),
+        ("lfUnderline", wintypes.BYTE), ("lfStrikeOut", wintypes.BYTE),
+        ("lfCharSet", wintypes.BYTE), ("lfOutPrecision", wintypes.BYTE),
+        ("lfClipPrecision", wintypes.BYTE), ("lfQuality", wintypes.BYTE),
+        ("lfPitchAndFamily", wintypes.BYTE), ("lfFaceName", ctypes.c_wchar * 32),
+    ]
+
+
+try:
+    _IMM32 = ctypes.windll.imm32
+    _USER32 = ctypes.windll.user32
+    _IMM32.ImmGetContext.restype = wintypes.HANDLE
+    _IMM32.ImmGetContext.argtypes = [wintypes.HWND]
+    _IMM32.ImmReleaseContext.argtypes = [wintypes.HWND, wintypes.HANDLE]
+    _IMM32.ImmSetCompositionFontW.argtypes = [wintypes.HANDLE, ctypes.POINTER(_LOGFONTW)]
+    _USER32.GetFocus.restype = wintypes.HWND
+except Exception:
+    _IMM32 = None
+    _USER32 = None
+
+
+def set_ime_composition_font(family: str, px: int):
+    """현재 키보드 포커스를 가진 창의 IME 조합 글자 폰트를 맞춘다.
+
+    Tk 는 Windows 에서 위젯마다 자식 HWND 를 만들고 IME 조합은 그 '포커스 창'에
+    붙으므로, 최상위 창이 아니라 GetFocus() 로 얻은 실제 포커스 창에 적용해야 한다.
+    한글 조합 글자가 거대하게 그려졌다 확정되면 작아지는 증상을 막는다. 실패는 무시.
+    """
+    if _IMM32 is None or _USER32 is None:
+        return
+    try:
+        hwnd = _USER32.GetFocus()
+        if not hwnd:
+            return
+        himc = _IMM32.ImmGetContext(hwnd)
+        if not himc:
+            return
+        try:
+            lf = _LOGFONTW()
+            lf.lfHeight = -abs(int(px))   # 음수 = 문자 높이(px)
+            lf.lfWeight = 400
+            lf.lfCharSet = 129            # HANGEUL_CHARSET
+            lf.lfFaceName = family[:31]
+            _IMM32.ImmSetCompositionFontW(himc, ctypes.byref(lf))
+        finally:
+            _IMM32.ImmReleaseContext(hwnd, himc)
+    except Exception:
+        pass
 
 
 class Stepper:
@@ -167,9 +228,20 @@ class ToggleSwitch:
         self.enabled = True
         self._imgs = {}   # (on, enabled) 이미지 캐시 (PhotoImage 참조 유지용)
         self.widget = tk.Label(parent, bg=bg, bd=0, cursor="hand2")
+        # 스위치 이미지 + 추가로 등록된 클릭 영역(제목/설명 등)을 모두 클릭 대상으로
+        self._targets = [self.widget]
         self.widget.bind("<Button-1>", self._toggle)
         self.var.trace_add("write", lambda *a: self._render())
         self._render()
+
+    def add_target(self, widget):
+        """제목/설명 같은 위젯도 눌러서 토글할 수 있게 클릭 영역으로 등록한다.
+
+        작은 스위치 이미지만 누를 수 있어 끄려다 빗나가는 문제를 막는다.
+        """
+        widget.bind("<Button-1>", self._toggle)
+        widget.config(cursor=("hand2" if self.enabled else "arrow"))
+        self._targets.append(widget)
 
     def _build_image(self, on: bool, enabled: bool) -> ImageTk.PhotoImage:
         ss = self.SS
@@ -196,7 +268,9 @@ class ToggleSwitch:
 
     def set_enabled(self, on: bool):
         self.enabled = bool(on)
-        self.widget.config(cursor=("hand2" if on else "arrow"))
+        cursor = "hand2" if on else "arrow"
+        for w in self._targets:
+            w.config(cursor=cursor)
         self._render()
 
     def _toggle(self, e):
@@ -212,9 +286,11 @@ class Dashboard:
 
         self._build_tabs()
         self._build_dashboard(self.dash_frame)
+        self._build_nonwork(self.nonwork_frame)
         self._build_settings(self.settings_frame)
         self._show_tab("dash")
         self._refresh()
+        self._refresh_nonwork()
 
         # 내용에 맞춰 창 크기를 자동 산정 (글자 잘림 방지)
         self.root.update_idletasks()
@@ -250,7 +326,7 @@ class Dashboard:
         bar = tk.Frame(self.root, bg=BG)
         bar.pack(fill="x", padx=18, pady=(14, 0))
         self._tab_btns = {}
-        for key, label in [("dash", "현황"), ("settings", "설정")]:
+        for key, label in [("dash", "현황"), ("nonwork", "비업무"), ("settings", "설정")]:
             b = tk.Label(
                 bar, text=label, font=(FONT, 11, "bold"),
                 bg=BG, fg=SUB, padx=14, pady=6, cursor="hand2",
@@ -263,16 +339,28 @@ class Dashboard:
         self.container = tk.Frame(self.root, bg=BG)
         self.container.pack(fill="both", expand=True)
         self.dash_frame = tk.Frame(self.container, bg=BG)
+        self.nonwork_frame = tk.Frame(self.container, bg=BG)
         self.settings_frame = tk.Frame(self.container, bg=BG)
 
     def _show_tab(self, key):
         self.dash_frame.pack_forget()
+        self.nonwork_frame.pack_forget()
         self.settings_frame.pack_forget()
-        frame = self.dash_frame if key == "dash" else self.settings_frame
+        frame = {
+            "dash": self.dash_frame,
+            "nonwork": self.nonwork_frame,
+            "settings": self.settings_frame,
+        }[key]
         frame.pack(fill="both", expand=True)
         for k, b in self._tab_btns.items():
             active = (k == key)
             b.config(fg=(ACCENT if active else SUB), bg=(CARD if active else BG))
+        self._active_tab = key
+        if key == "nonwork":
+            self._refresh_nonwork()   # 탭이 보이는 순간 최신화
+        # 탭마다 내용 높이가 다르므로 전환할 때마다 창 높이를 다시 맞춘다
+        # (비업무 탭이 비어 줄어든 뒤 현황으로 돌아오면 잘리던 문제 해결)
+        self._refit_height()
 
     # ----- 현황 레이아웃 1회 생성 -----
     def _build_dashboard(self, parent):
@@ -503,7 +591,7 @@ class Dashboard:
         try:
             ivs = st.intervals()
             base_work = S.seconds_for_day(ivs, today)
-            stay = S.stay_seconds(ivs, today)
+            stay = S.stay_seconds(ivs, today, st.ongoing_pause_now(today))
             base_nonwork = max(0.0, stay - base_work)
             # 비업무 = base_nonwork + adjust 가 [0, 체류] 안에 머물도록 보정값 제한.
             #   ⇒ adjust ∈ [-비업무(다 뺄 수 있는 한도), +실업무(다 더할 수 있는 한도)]
@@ -522,6 +610,149 @@ class Dashboard:
         finally:
             st.close()
         self._refresh()
+
+    # ----- 비업무(일시정지) 기록 탭 -----
+    NW_METHOD_COLORS = {
+        "idle": TODAY,          # 자리비움 - 호박색
+        "lock": ACCENT,         # 화면잠금 - 파랑
+        "screensaver": VAC,     # 화면보호기 - 라벤더
+        "manual_pause": GOOD,   # 수동 일시정지 - 초록
+        "settings_change": SUB,
+    }
+
+    def _build_nonwork(self, parent):
+        root = tk.Frame(parent, bg=BG)
+        root.pack(fill="both", expand=True, padx=16, pady=10)
+
+        head = tk.Frame(root, bg=BG)
+        head.pack(fill="x", pady=(0, 6))
+        self.lbl_nw_date = self._label(head, fg=FG, size=13, bold=True, bg=BG)
+        self.lbl_nw_date.pack(side="left")
+        self.lbl_nw_total = self._label(head, fg=SUB, size=11, bold=True, bg=BG)
+        self.lbl_nw_total.pack(side="right")
+
+        self._label(
+            root,
+            "오늘 업무시간에서 빠진(일시정지) 구간입니다. 사유는 직접 입력하면 저장됩니다.",
+            fg=SUB, size=9, bg=BG,
+        ).pack(anchor="w", pady=(0, 8))
+
+        self.nw_list = tk.Frame(root, bg=BG)
+        self.nw_list.pack(fill="both", expand=True)
+
+        # 사유 입력란 전용 폰트(명시적 객체) — 조합 폰트 지정에도 사용
+        self.nw_font = tkfont.Font(family=FONT, size=10)
+        self._nw_ime_px = self.nw_font.metrics("linespace")  # 조합 폰트 높이(px)
+
+        # stop_id 별 위젯/값 추적 (사유 메모 보존 + 진행 중 구간 제자리 갱신)
+        self.nw_notes = {}     # stop_id -> StringVar
+        self.nw_entries = {}   # stop_id -> Entry
+        self.nw_rows = {}      # stop_id -> {"time":Label, "dur":Label}
+        self._nw_sig = None    # 행 구조가 바뀔 때만 다시 그리기 위한 시그니처
+
+    def _nw_focus_in(self, entry):
+        """사유 입력란에서 한글 조합 폰트를 입력란 폰트에 맞춘다.
+
+        Tk 가 조합 시작 시 폰트를 되돌리므로 즉시 + 다음 idle(after 0) 두 번 적용해
+        Tk 의 재설정 뒤에 우리 값이 남도록 한다.
+        """
+        set_ime_composition_font(FONT, self._nw_ime_px)
+        self.root.after(0, lambda: set_ime_composition_font(FONT, self._nw_ime_px))
+
+    def _nw_method(self, reason):
+        label = S.NONWORK_REASON_LABELS.get(reason, "기타")
+        color = self.NW_METHOD_COLORS.get(reason, SUB)
+        return label, color
+
+    def _save_nw_note(self, stop_id):
+        var = self.nw_notes.get(stop_id)
+        if var is None:
+            return
+        st = S.Storage()
+        try:
+            st.set_nonwork_note(stop_id, var.get())
+        finally:
+            st.close()
+
+    def _flush_nw_notes(self):
+        """행을 다시 그리기 전에 입력 중이던 사유를 모두 저장(유실 방지)."""
+        for sid in list(self.nw_notes):
+            self._save_nw_note(sid)
+
+    def _build_nw_row(self, r, p, note):
+        # 한 구간 = 한 줄(grid). 열 너비는 각 열의 가장 넓은 칸에 자동으로 맞춰져
+        # 행끼리 정렬되며, 한글이라도 잘리지 않는다. 사유 입력란(열 3)만 늘어난다.
+        sid = p["stop_id"]
+        label, color = self._nw_method(p["reason"])
+        self._label(self.nw_list, label, fg=color, size=10, bold=True, bg=BG).grid(
+            row=r, column=0, sticky="w", padx=(0, 12), pady=3)
+        tlbl = self._label(self.nw_list, fg=FG, size=10, bg=BG)
+        tlbl.grid(row=r, column=1, sticky="w", padx=(0, 12), pady=3)
+        dlbl = self._label(self.nw_list, fg=SUB, size=10, bold=True, bg=BG)
+        dlbl.grid(row=r, column=2, sticky="w", padx=(0, 12), pady=3)
+        self.nw_rows[sid] = {"time": tlbl, "dur": dlbl}
+
+        var = tk.StringVar(value=note)
+        ent = tk.Entry(
+            self.nw_list, textvariable=var, bg=CARD2, fg=FG, insertbackground=FG,
+            relief="flat", font=self.nw_font,
+        )
+        ent.grid(row=r, column=3, sticky="ew", pady=3, ipady=3)
+        ent.bind("<FocusIn>", lambda e, en=ent: self._nw_focus_in(en))
+        # 조합 시작 때 Tk 가 폰트를 되돌리므로 키 입력마다 다시 적용
+        ent.bind("<Key>", lambda e, en=ent: self._nw_focus_in(en))
+        ent.bind("<Return>", lambda e, s=sid: (self._save_nw_note(s), self.root.focus()))
+        ent.bind("<FocusOut>", lambda e, s=sid: self._save_nw_note(s))
+        self.nw_notes[sid] = var
+        self.nw_entries[sid] = ent
+
+    def _rebuild_nw_rows(self, periods, notes):
+        self._flush_nw_notes()
+        for w in self.nw_list.winfo_children():
+            w.destroy()
+        self.nw_notes.clear()
+        self.nw_entries.clear()
+        self.nw_rows.clear()
+        if not periods:
+            self._label(
+                self.nw_list, "오늘 기록된 비업무 구간이 없습니다.",
+                fg=SUB, size=10, bg=BG,
+            ).grid(row=0, column=0, sticky="w", pady=8)
+            return
+        self.nw_list.columnconfigure(3, weight=1)   # 사유 입력란이 남는 폭을 채움
+        for i, p in enumerate(periods):
+            self._build_nw_row(i, p, notes.get(p["stop_id"], ""))
+
+    def _refresh_nonwork(self):
+        today = date.today()
+        self.lbl_nw_date.config(
+            text=f"{today:%Y년 %m월 %d일} ({WEEKDAY[today.weekday()]}) 비업무 기록"
+        )
+        st = S.Storage()
+        try:
+            periods = st.nonwork_periods(today)
+            notes = {p["stop_id"]: st.get_nonwork_note(p["stop_id"]) for p in periods}
+        finally:
+            st.close()
+
+        total = sum(p["seconds"] for p in periods)
+        self.lbl_nw_total.config(text=f"합계 {S.fmt_dur(total)}" if periods else "")
+
+        sig = tuple((p["stop_id"], p["ongoing"]) for p in periods)
+        if sig != self._nw_sig:
+            self._rebuild_nw_rows(periods, notes)
+            self._nw_sig = sig
+            if getattr(self, "_active_tab", None) == "nonwork":
+                self._refit_height()
+
+        # 시각/길이는 매번 제자리 갱신 (진행 중 구간이 실시간으로 늘어남)
+        for p in periods:
+            r = self.nw_rows.get(p["stop_id"])
+            if not r:
+                continue
+            end_txt = "진행 중" if p["ongoing"] else f"{p['end']:%H:%M}"
+            r["time"].config(text=f"{p['start']:%H:%M} → {end_txt}")
+            r["dur"].config(text=S.fmt_dur(p["seconds"]))
 
     # ----- 설정 레이아웃 -----
     def _build_settings(self, parent):
@@ -588,6 +819,114 @@ class Dashboard:
         self.var_idle.trace_add("write", lambda *a: self._sync_idle_state())
         self._set_edit_mode(False)   # 시작은 잠금 상태
 
+        # ----- 데이터 내보내기 -----
+        self._label(
+            root, "데이터 내보내기", fg=FG, size=13, bold=True, bg=BG
+        ).pack(anchor="w", pady=(16, 3))
+        self._label(
+            root, "선택한 달의 평일(월~금) 기록만 CSV(엑셀)로 저장합니다. 토·일과 기록 없는 날은 제외됩니다.",
+            fg=SUB, size=9, bg=BG,
+        ).pack(anchor="w", pady=(0, 8))
+
+        exp_card = self._card(root)
+        exrow = tk.Frame(exp_card, bg=CARD)
+        exrow.pack(fill="x")
+        today = date.today()
+        self._export_ym = [today.year, today.month]
+        self._adj_btn(exrow, "◀", lambda: self._export_change_month(-1), FG)
+        self.lbl_export_month = self._label(exrow, fg=FG, size=12, bold=True)
+        self.lbl_export_month.pack(side="left", padx=(2, 2))
+        self.btn_export_next = self._adj_btn(exrow, "▶", lambda: self._export_change_month(1), FG)
+        self.btn_export = self._settings_btn(exrow, "내보내기", self._do_export, ACCENT)
+        self.btn_export.pack(side="left", padx=(12, 0))
+
+        # 저장 위치: meta 'export_dir' 에 유지, 없으면 기본 폴더
+        st = S.Storage()
+        try:
+            saved_dir = st.get_meta("export_dir")
+        finally:
+            st.close()
+        self._export_dir = saved_dir or EXP.default_out_dir()
+        dirrow = tk.Frame(exp_card, bg=CARD)
+        dirrow.pack(fill="x", pady=(8, 0))
+        self._adj_btn(dirrow, "위치 변경", self._export_pick_dir, FG)
+        self.lbl_export_dir = self._label(dirrow, fg=SUB, size=9)
+        self.lbl_export_dir.pack(side="left")
+        self._update_export_dir()
+
+        self.lbl_export_done = self._label(exp_card, fg=SUB, size=9)
+        self.lbl_export_done.pack(anchor="w", pady=(8, 0))
+        self._update_export_month()
+
+    def _update_export_month(self):
+        y, m = self._export_ym
+        self.lbl_export_month.config(text=f"{y:04d}-{m:02d}")
+        # 현재 달 이상이면 ▶ 비활성화(미래로 이동 차단)
+        today = date.today()
+        if (y, m) >= (today.year, today.month):
+            self.btn_export_next.config(state="disabled", disabledforeground=SUB)
+        else:
+            self.btn_export_next.config(state="normal")
+
+    def _export_change_month(self, delta: int):
+        y, m = self._export_ym
+        m += delta
+        if m < 1:
+            y -= 1
+            m = 12
+        elif m > 12:
+            y += 1
+            m = 1
+        # 현재 달보다 미래면 클램프(이동 취소)
+        today = date.today()
+        if (y, m) > (today.year, today.month):
+            return
+        self._export_ym = [y, m]
+        self._update_export_month()
+        self.lbl_export_done.config(text="", fg=SUB)
+
+    def _update_export_dir(self):
+        path = self._export_dir
+        if len(path) > 46:   # 창이 옆으로 늘어나지 않게 가운데를 줄임
+            path = path[:20] + "…" + path[-25:]
+        self.lbl_export_dir.config(text=f"저장 위치: {path}")
+
+    def _export_pick_dir(self):
+        initial = self._export_dir if os.path.isdir(self._export_dir) else os.path.expanduser("~")
+        chosen = filedialog.askdirectory(
+            parent=self.root, title="내보내기 폴더 선택", initialdir=initial
+        )
+        if not chosen:
+            return
+        self._export_dir = os.path.normpath(chosen)
+        st = S.Storage()
+        try:
+            st.set_meta("export_dir", self._export_dir)
+        finally:
+            st.close()
+        self._update_export_dir()
+        self.lbl_export_done.config(text="", fg=SUB)
+
+    def _do_export(self):
+        y, m = self._export_ym
+        try:
+            paths = EXP.export_month(y, m, self._export_dir)
+        except Exception as e:
+            self.lbl_export_done.config(text=f"내보내기 실패: {e}", fg=TODAY)
+            return
+        self.lbl_export_done.config(
+            text=f"저장됨 · {os.path.dirname(paths['daily'])}", fg=GOOD
+        )
+        # 탐색기로 폴더 열고 daily 파일 선택
+        daily = paths["daily"]
+        try:
+            if os.path.exists(daily):
+                subprocess.Popen(f'explorer /select,"{os.path.normpath(daily)}"')
+            else:
+                os.startfile(os.path.dirname(daily))
+        except Exception:
+            pass
+
     def _settings_btn(self, parent, text, cmd, fg):
         return tk.Button(
             parent, text=text, command=cmd, font=(FONT, 10, "bold"),
@@ -598,11 +937,16 @@ class Dashboard:
     def _setting_check(self, card, var, title, desc):
         top = tk.Frame(card, bg=CARD)
         top.pack(fill="x")
-        self._label(top, title, fg=FG, size=11, bold=True).pack(side="left")
+        title_lbl = self._label(top, title, fg=FG, size=11, bold=True)
+        title_lbl.pack(side="left")
         sw = ToggleSwitch(top, var, bg=CARD)
         sw.widget.pack(side="right")
         self.toggles.append(sw)
-        self._label(card, desc, fg=SUB, size=9).pack(anchor="w", pady=(2, 0))
+        desc_lbl = self._label(card, desc, fg=SUB, size=9)
+        desc_lbl.pack(anchor="w", pady=(2, 0))
+        # 제목/설명/행 빈 곳 어디를 눌러도 토글 (작은 스위치만 누르기 어려운 문제 방지)
+        for w in (top, title_lbl, desc_lbl):
+            sw.add_target(w)
 
     # ----- 편집 모드 제어 -----
     def _set_edit_mode(self, editing: bool):
@@ -680,7 +1024,8 @@ class Dashboard:
             # 오늘이 주말이면 days 에 없으므로 오늘 값도 따로 챙긴다 (오늘 카드용)
             adjusts.setdefault(today, st.get_adjust_seconds(today))
             leaves.setdefault(today, st.get_leave(today))
-            return ivs, last, adjusts, leaves
+            pause_until = st.ongoing_pause_now(today)
+            return ivs, last, adjusts, leaves, pause_until
         finally:
             st.close()
 
@@ -693,7 +1038,7 @@ class Dashboard:
 
     # ----- 값만 갱신 (깜빡임 없음) -----
     def _refresh(self):
-        ivs, last, adjusts, leaves = self._load()
+        ivs, last, adjusts, leaves, pause_until = self._load()
         today = date.today()
 
         self.lbl_date.config(
@@ -704,13 +1049,16 @@ class Dashboard:
 
         today_adj = adjusts.get(today, 0)
         today_leave = leaves.get(today)
-        today_work, today_nonwork = S.split_for_day(ivs, today, today_adj, today_leave)
+        today_work, today_nonwork = S.split_for_day(
+            ivs, today, today_adj, today_leave, pause_until
+        )
         first, lastt = S.day_bounds(ivs, today)
+        today_stay = S.stay_seconds(ivs, today, pause_until)
         self.lbl_today.config(text=S.fmt_hm(today_work))
         self.today_cells["출근"].config(text=f"{first:%H:%M}" if first else "--:--")
         self.today_cells["최근 활동"].config(text=f"{lastt:%H:%M}" if lastt else "--:--")
         self.today_cells["체류시간"].config(
-            text=S.fmt_hm((lastt - first).total_seconds()) if first else "-"
+            text=S.fmt_hm(today_stay) if first else "-"
         )
         self.today_cells["비업무"].config(
             text=S.fmt_hm(today_nonwork) if first else "-"
@@ -778,6 +1126,7 @@ class Dashboard:
     def _tick(self):
         try:
             self._refresh()
+            self._refresh_nonwork()
         finally:
             self.root.after(REFRESH_MS, self._tick)
 

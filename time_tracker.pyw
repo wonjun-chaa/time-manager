@@ -104,21 +104,31 @@ class Tracker:
             or (self.idle and s["idle_enabled"])
         )
 
-    def _apply_locked(self, stop_reason: str, start_reason: str):
-        """self.lock 을 보유한 상태에서 active 전환을 반영한다."""
+    def _apply_locked(self, stop_reason: str, start_reason: str,
+                      stop_dt=None):
+        """self.lock 을 보유한 상태에서 active 전환을 반영한다.
+
+        stop_dt 가 주어지면(자리비움 소급 등) stop 이벤트를 그 시각으로 기록한다.
+        단, 직전 이벤트 ts 보다 앞서면 안 되므로(삽입=시간 순서 전제) 그 값으로
+        클램프한다. start 경로는 stop_dt 와 무관하게 기존 그대로.
+        """
         should_be_active = not self._effective_pause()
         if should_be_active and not self.active:
             self.storage.add_event("start", start_reason)
             self.active = True
             self.storage.touch_heartbeat()
         elif not should_be_active and self.active:
-            self.storage.add_event("stop", stop_reason)
+            if stop_dt is not None:
+                last_ts = self.storage.last_event_time()
+                if last_ts is not None and stop_dt < last_ts:
+                    stop_dt = last_ts
+            self.storage.add_event("stop", stop_reason, stop_dt)
             self.active = False
 
-    def _recompute(self, stop_reason: str, start_reason: str):
+    def _recompute(self, stop_reason: str, start_reason: str, stop_dt=None):
         """상태 변화에 따라 start/stop 경계 이벤트를 발생시킨다."""
         with self.lock:
-            self._apply_locked(stop_reason, start_reason)
+            self._apply_locked(stop_reason, start_reason, stop_dt)
 
     def refresh_settings(self) -> dict:
         """설정을 DB 에서 다시 읽어 반영한다(대시보드에서 바뀐 값 포함).
@@ -144,9 +154,21 @@ class Tracker:
         self.screensaver = running
         self._recompute("screensaver", "screensaver_end")
 
-    def on_idle(self, is_idle: bool):
+    def on_idle(self, is_idle: bool, idle_elapsed: float = 0.0):
+        """자리비움 상태 전환을 반영한다.
+
+        idle 진입 시엔 실제로 자리를 비운 시작(=마지막 입력 시각 ≈ now-idle_elapsed)
+        으로 stop 을 소급 기록한다. 그래야 감지 지연(threshold)만큼의 자리비움이
+        업무시간에 잘못 포함되지 않고, 짧은 비업무 구간도 정직하게 남는다.
+        """
         self.idle = is_idle
-        self._recompute("idle", "idle_end")
+        stop_dt = None
+        if is_idle and idle_elapsed > 0:
+            from datetime import datetime, timedelta
+            stop_dt = (datetime.now() - timedelta(seconds=idle_elapsed)).replace(
+                microsecond=0
+            )
+        self._recompute("idle", "idle_end", stop_dt)
 
     def set_manual_pause(self, value: bool):
         self.manual_pause = value
@@ -280,9 +302,11 @@ class App:
 
             # 자리비움(입력 없음) 감지 - 임계값은 설정에서
             threshold = settings.get("idle_threshold_sec", IDLE_THRESHOLD_SEC)
-            is_idle = idle_seconds() >= threshold
+            idle_sec = idle_seconds()
+            is_idle = idle_sec >= threshold
             if is_idle != prev_idle:
-                self.tracker.on_idle(is_idle)
+                # 경과초를 넘겨 stop 을 마지막 입력 시각으로 소급 기록하게 한다.
+                self.tracker.on_idle(is_idle, idle_sec)
                 prev_idle = is_idle
 
             # 하트비트는 HEARTBEAT_SEC 주기로만 기록

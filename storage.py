@@ -39,6 +39,18 @@ LEAVE_PREFIX = "leave:"
 LEAVE_LABELS = {"vacation": "휴가", "trip": "출장"}
 LEAVE_DEFAULT_SEC = 8 * 3600
 
+# 비업무(일시정지) 구간의 사유 텍스트 (meta 'nwnote:<stop이벤트 id>').
+# 구간을 일으킨 stop 이벤트의 id 에 묶어 저장하므로 날짜가 지나도 안정적으로 유지된다.
+NONWORK_NOTE_PREFIX = "nwnote:"
+# 일시정지를 유발한 stop reason → 카운팅 방식 한글 라벨.
+NONWORK_REASON_LABELS = {
+    "idle": "자리비움",
+    "lock": "화면잠금",
+    "screensaver": "화면보호기",
+    "manual_pause": "수동 일시정지",
+    "settings_change": "설정 변경",
+}
+
 
 def _coerce_setting(key: str, raw: str):
     """meta 에 저장된 문자열을 기본값 타입에 맞게 변환."""
@@ -118,6 +130,15 @@ class Storage:
             "SELECT * FROM events ORDER BY id DESC LIMIT 1"
         ).fetchone()
 
+    def last_event_time(self) -> datetime | None:
+        """마지막으로 기록된 이벤트의 시각(datetime). 이벤트가 없으면 None.
+
+        idle stop 을 마지막 입력 시각으로 소급 기록할 때, 직전 이벤트 ts 아래로
+        내려가지 않도록 클램프하는 기준으로 쓴다(이벤트는 삽입=시간 순서 전제).
+        """
+        row = self.last_event()
+        return _parse(row["ts"]) if row else None
+
     # ----- heartbeat / meta -----
     def set_meta(self, key: str, value: str):
         self.conn.execute(
@@ -192,6 +213,111 @@ class Storage:
         else:
             self.conn.execute("DELETE FROM meta WHERE key=?", (key,))
             self.conn.commit()
+
+    # ----- 비업무(일시정지) 구간 사유 메모 -----
+    def get_nonwork_note(self, stop_id) -> str:
+        v = self.get_meta(NONWORK_NOTE_PREFIX + str(stop_id))
+        return v or ""
+
+    def set_nonwork_note(self, stop_id, text):
+        key = NONWORK_NOTE_PREFIX + str(stop_id)
+        text = (text or "").strip()
+        if text:
+            self.set_meta(key, text)
+        else:
+            self.conn.execute("DELETE FROM meta WHERE key=?", (key,))
+            self.conn.commit()
+
+    # ----- 비업무(일시정지) 구간 목록 -----
+    def nonwork_periods(self, day: date):
+        """해당 날짜에 업무시간에서 빠진(일시정지) 구간 목록을 반환.
+
+        각 항목 dict: stop_id, start, end, seconds, reason, ongoing.
+          - 활동 구간 사이의 공백이 곧 비업무 구간이고, 그 사유(카운팅 방식)는
+            공백을 시작시킨 stop 이벤트의 reason 이다(idle/lock/screensaver...).
+          - 체류시간(첫~마지막 활동) 안의 공백만 포함한다(출근 전/퇴근 후 제외).
+          - 현재 일시정지 중이면 진행 중(ongoing=True) 구간을 now 까지로 추가한다.
+        stop_id 는 사유 메모(get/set_nonwork_note)의 안정적 키로 쓰인다.
+        """
+        rows = self.conn.execute(
+            "SELECT id, ts, kind, reason FROM events ORDER BY id ASC"
+        ).fetchall()
+        # (start_dt, end_dt, stop_id, stop_reason); 마지막 열린 구간은 stop_id=None.
+        seq = []
+        open_start = None
+        for r in rows:
+            dt = _parse(r["ts"])
+            if r["kind"] == "start":
+                if open_start is None:
+                    open_start = dt
+            else:  # stop
+                if open_start is not None:
+                    seq.append((open_start, dt, r["id"], r["reason"]))
+                    open_start = None
+
+        # 아직 열려 있는(현재 업무 중인) 구간도 페어링에 포함해야, 잠깐 멈췄다
+        # 다시 일하는 동안 생긴 공백(마지막 닫힌 구간 ↔ 열린 구간 사이)을 놓치지 않는다.
+        if open_start is not None:
+            end = self.last_active() or _now()
+            if end < open_start:
+                end = open_start
+            seq.append((open_start, end, None, None))
+
+        plain = [(s, e) for (s, e, _, _) in seq]
+        first, last = day_bounds(plain, day)
+        periods = []
+        if first is None:
+            return periods
+
+        for i in range(len(seq) - 1):
+            g_start = seq[i][1]
+            g_end = seq[i + 1][0]
+            if g_end <= g_start:
+                continue
+            if g_start < first or g_end > last:
+                continue  # 체류시간 밖은 비업무가 아님
+            periods.append({
+                "stop_id": seq[i][2],          # 공백을 시작시킨 stop 이벤트
+                "start": g_start,
+                "end": g_end,
+                "seconds": (g_end - g_start).total_seconds(),
+                "reason": seq[i][3],
+                "ongoing": False,
+            })
+
+        # 현재 일시정지 중(마지막 이벤트가 stop, 아직 재개 전)이면 진행 중 구간 추가
+        if rows and rows[-1]["kind"] == "stop":
+            last_stop = rows[-1]
+            if last_stop["reason"] in NONWORK_REASON_LABELS:
+                g_start = _parse(last_stop["ts"])
+                now = _now()
+                if g_start.date() == day and now > g_start and g_start >= first:
+                    periods.append({
+                        "stop_id": last_stop["id"],
+                        "start": g_start,
+                        "end": now,
+                        "seconds": (now - g_start).total_seconds(),
+                        "reason": last_stop["reason"],
+                        "ongoing": True,
+                    })
+        return periods
+
+    def ongoing_pause_now(self, day: date) -> datetime | None:
+        """현재 일시정지 중이면(마지막 이벤트가 비업무성 stop) now 를 반환.
+
+        진행 중 일시정지를 체류/비업무에 실시간 반영하기 위한 기준 시각으로,
+        해당 날짜(day)에 시작된 일시정지만 인정한다 (nonwork_periods 와 같은 기준).
+        """
+        last = self.last_event()
+        if last is None or last["kind"] != "stop":
+            return None
+        if last["reason"] not in NONWORK_REASON_LABELS:
+            return None
+        g_start = _parse(last["ts"])
+        now = _now()
+        if g_start.date() != day or now <= g_start:
+            return None
+        return now
 
     # ----- 시작 시 비정상 종료 복구 -----
     def recover_unclean_shutdown(self) -> datetime | None:
@@ -284,16 +410,24 @@ def day_bounds(intervals, day: date):
     return first, last
 
 
-def stay_seconds(intervals, day: date) -> float:
-    """해당 날짜의 체류시간(첫 활동~마지막 활동) 초. 기록 없으면 0."""
+def stay_seconds(intervals, day: date, until: datetime | None = None) -> float:
+    """해당 날짜의 체류시간(첫 활동~마지막 활동) 초. 기록 없으면 0.
+
+    until 이 주어지면(진행 중 일시정지의 now) 마지막 활동을 그 시각까지 연장해
+    일시정지 중에도 체류·비업무가 실시간으로 늘게 한다. 자정은 넘지 않는다.
+    """
     first, last = day_bounds(intervals, day)
     if first is None:
         return 0.0
+    if until is not None:
+        day_end = datetime.combine(day, time.min) + timedelta(days=1)
+        last = max(last, min(until, day_end))
     return max(0.0, (last - first).total_seconds())
 
 
 def split_for_day(intervals, day: date, adjust_sec: float = 0.0,
-                  leave_kind: str | None = None):
+                  leave_kind: str | None = None,
+                  pause_until: datetime | None = None):
     """해당 날짜의 (실 업무초, 비업무초) 를 보정값을 반영해 반환.
 
     휴가/출장으로 표시된 날(leave_kind)은 실제 기록과 무관하게
@@ -302,11 +436,13 @@ def split_for_day(intervals, day: date, adjust_sec: float = 0.0,
     그 외에는 비업무 = 체류 - 업무. 수기 보정(adjust_sec, 부호 있음)은 비업무에
     더해지고, 그만큼 업무에서 빠진다. 업무+비업무 = 체류 불변식을 유지하며
     [0, 체류] 범위로 클립한다.
+
+    pause_until 은 진행 중 일시정지를 실시간 반영하기 위한 연장 시각.
     """
     if leave_kind in LEAVE_LABELS:
         return float(LEAVE_DEFAULT_SEC), 0.0
     base_work = seconds_for_day(intervals, day)
-    stay = stay_seconds(intervals, day)
+    stay = stay_seconds(intervals, day, pause_until)
     base_nonwork = max(0.0, stay - base_work)
     nonwork = min(max(0.0, base_nonwork + adjust_sec), stay)
     work = stay - nonwork
@@ -319,3 +455,15 @@ def fmt_hm(seconds: float) -> str:
     m = (seconds % 3600) // 60
     # 0시간은 표기하지 않는다 (예: 34분, 2시간 5분)
     return f"{h}시간 {m}분" if h else f"{m}분"
+
+
+def fmt_dur(seconds: float) -> str:
+    """짧은 구간까지 정직하게 표기한다.
+
+    60초 미만은 '초' 단위로(예: 45초, 0이면 0초), 60초 이상은 fmt_hm 에 위임한다.
+    비업무 구간의 짧은 잠금/자리비움이 '0분' 으로 뭉개지지 않게 하기 위함.
+    """
+    seconds = int(seconds)
+    if seconds < 60:
+        return f"{seconds}초"
+    return fmt_hm(seconds)
