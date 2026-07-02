@@ -453,8 +453,13 @@ def fmt_hm(seconds: float) -> str:
     seconds = int(seconds)
     h = seconds // 3600
     m = (seconds % 3600) // 60
-    # 0시간은 표기하지 않는다 (예: 34분, 2시간 5분)
-    return f"{h}시간 {m}분" if h else f"{m}분"
+    # 0시간은 표기하지 않고(예: 34분), 시간이 있고 분이 0이면 "0분"도 생략한다
+    # (예: 8시간 0분 → 8시간, 2시간 5분).
+    if h and m:
+        return f"{h}시간 {m}분"
+    if h:
+        return f"{h}시간"
+    return f"{m}분"
 
 
 def fmt_dur(seconds: float) -> str:

@@ -12,6 +12,7 @@ import os
 import subprocess
 import tkinter as tk
 import tkinter.font as tkfont
+import tkinter.ttk as ttk
 from tkinter import filedialog
 import ctypes
 from ctypes import wintypes
@@ -32,6 +33,7 @@ SUB = "#9aa3bd"
 ACCENT = "#78c8ff"
 TODAY = "#ffce6b"
 GOOD = "#7ee0a8"
+GRID = "#4a5370"        # 차트 8시간 기준선 (SUB 보다 흐린 점선)
 
 # 토글 스위치 색 (너무 밝지 않게 차분하게)
 TOGGLE_ON = "#3f8f66"    # 켜짐 트랙 - 가라앉은 초록
@@ -59,6 +61,8 @@ BAR_MAX = 300     # 막대 최대 길이
 VAL_W = 96        # 막대 오른쪽 시간 숫자 영역
 CHART_W = BAR_X0 + BAR_MAX + VAL_W
 ROW_H = 26
+
+NW_LIST_MAX_H = 300     # 비업무 목록 최대 표시 높이(px). 넘으면 스크롤(행 약 9개 분량)
 
 
 class _LOGFONTW(ctypes.Structure):
@@ -283,6 +287,7 @@ class Dashboard:
         self.root = tk.Tk()
         self.root.title("업무시간 현황")
         self.root.configure(bg=BG)
+        self._set_window_icon()
 
         self._build_tabs()
         self._build_dashboard(self.dash_frame)
@@ -295,7 +300,8 @@ class Dashboard:
         # 내용에 맞춰 창 크기를 자동 산정 (글자 잘림 방지)
         self.root.update_idletasks()
         w = max(540, self.root.winfo_reqwidth())
-        h = self.root.winfo_reqheight()
+        # 화면 밖으로 나가지 않게 높이 상한
+        h = min(self.root.winfo_reqheight(), self.root.winfo_screenheight() - 80)
         self.root.geometry(f"{w}x{h}")
         self.root.minsize(w, h)
 
@@ -303,11 +309,44 @@ class Dashboard:
         sw, sh = self.root.winfo_screenwidth(), self.root.winfo_screenheight()
         self.root.geometry(f"+{(sw - w) // 2}+{max(0, (sh - h) // 2 - 40)}")
 
+        # 다크 테마와 어울리도록 타이틀바도 어둡게
+        self._apply_dark_titlebar()
+
         # 열릴 때 잠깐 맨 앞으로
         self.root.attributes("-topmost", True)
         self.root.after(800, lambda: self.root.attributes("-topmost", False))
 
         self.root.after(REFRESH_MS, self._tick)
+
+    # ----- 창 아이콘 / 다크 타이틀바 (Windows) -----
+    def _set_window_icon(self):
+        """트레이 아이콘(어두운 원 + 시계 바늘)과 같은 디자인을 창 아이콘으로."""
+        try:
+            img = Image.new("RGB", (64, 64), (28, 32, 48))
+            d = ImageDraw.Draw(img)
+            d.ellipse((6, 6, 58, 58), outline=(120, 200, 255), width=4)
+            d.line((32, 32, 32, 14), fill=(120, 200, 255), width=4)   # 시계 바늘
+            d.line((32, 32, 46, 38), fill=(120, 200, 255), width=4)
+            self._icon_img = ImageTk.PhotoImage(img)   # GC 방지용 참조 보관
+            self.root.iconphoto(True, self._icon_img)
+        except Exception:
+            pass
+
+    def _apply_dark_titlebar(self):
+        """DWM 로 타이틀바를 다크 모드로 (Win11 22621: 속성 20 = 다크모드)."""
+        try:
+            self.root.update_idletasks()
+            # tk 위젯 HWND 의 부모가 실제 최상위 창
+            hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+            val = ctypes.c_int(1)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 20, ctypes.byref(val), ctypes.sizeof(val)
+            )
+            # 적용이 즉시 반영 안 되는 경우가 있어 한 번 다시 그리게 한다
+            self.root.withdraw()
+            self.root.deiconify()
+        except Exception:
+            pass
 
     # ----- 위젯 헬퍼 -----
     def _label(self, parent, text="", *, fg=FG, size=11, bold=False, bg=CARD):
@@ -423,6 +462,13 @@ class Dashboard:
                 BAR_X0 + BAR_MAX + 6, y, text="", fill=FG, font=(FONT, 9), anchor="w"
             )
             self.bars.append((day_id, bar_id, val_id, y))
+
+        # 8시간 기준 세로 점선 (막대 위에 보이도록 막대 아이템 다음에 생성).
+        # x 좌표는 _refresh 에서 현재 스케일에 맞춰 갱신한다.
+        self.chart_baseline = self.chart.create_line(
+            BAR_X0, 2, BAR_X0, WEEKDAYS_SHOWN * ROW_H + 4,
+            fill=GRID, dash=(2, 3),
+        )
 
         # 휴가 · 출장 표시 (접기/펴기)
         self._build_leave(wcard)
@@ -563,7 +609,8 @@ class Dashboard:
         self.root.update_idletasks()
         rw = max(540, self.root.winfo_reqwidth())
         w = max(self.root.winfo_width(), rw)
-        h = self.root.winfo_reqheight()
+        # 비업무 구간이 많아도 창이 화면 밖으로 나가지 않게 상한을 둔다
+        h = min(self.root.winfo_reqheight(), self.root.winfo_screenheight() - 80)
         self.root.geometry(f"{w}x{h}")
         self.root.minsize(rw, h)
 
@@ -624,31 +671,132 @@ class Dashboard:
         root = tk.Frame(parent, bg=BG)
         root.pack(fill="both", expand=True, padx=16, pady=10)
 
+        # 조회 날짜 (기본 오늘). ◀/▶ 로 이동, 오늘 이후로는 못 감.
+        self._nw_day = date.today()
+
         head = tk.Frame(root, bg=BG)
         head.pack(fill="x", pady=(0, 6))
-        self.lbl_nw_date = self._label(head, fg=FG, size=13, bold=True, bg=BG)
-        self.lbl_nw_date.pack(side="left")
+        nav = tk.Frame(head, bg=BG)
+        nav.pack(side="left")
+        self.btn_nw_prev = self._adj_btn(nav, "◀", lambda: self._nw_shift(-1), FG)
+        self.lbl_nw_date = self._label(nav, fg=FG, size=13, bold=True, bg=BG)
+        self.lbl_nw_date.pack(side="left", padx=(2, 2))
+        self.btn_nw_next = self._adj_btn(nav, "▶", lambda: self._nw_shift(1), FG)
+        self.btn_nw_next.config(disabledforeground=SUB)
+        # 오늘이 아닐 때만 보이는 "오늘" 복귀 버튼 (pack/forget)
+        self.btn_nw_today = self._adj_btn(nav, "오늘", self._nw_goto_today, ACCENT)
+        self.btn_nw_today.pack_forget()
+
         self.lbl_nw_total = self._label(head, fg=SUB, size=11, bold=True, bg=BG)
         self.lbl_nw_total.pack(side="right")
+        # 사유 저장 피드백 ("사유 저장됨"; 값이 실제로 바뀐 저장에서만 잠깐 표시)
+        self.lbl_nw_saved = self._label(head, fg=GOOD, size=9, bold=True, bg=BG)
+        self.lbl_nw_saved.pack(side="right", padx=(0, 12))
+        self._nw_saved_after = None
 
         self._label(
             root,
-            "오늘 업무시간에서 빠진(일시정지) 구간입니다. 사유는 직접 입력하면 저장됩니다.",
+            "업무시간에서 빠진(일시정지) 구간입니다. 사유는 직접 입력하면 저장됩니다.",
             fg=SUB, size=9, bg=BG,
         ).pack(anchor="w", pady=(0, 8))
 
-        self.nw_list = tk.Frame(root, bg=BG)
-        self.nw_list.pack(fill="both", expand=True)
+        # 스크롤 영역: 캔버스 + 내부 frame(=nw_list). 목록 높이가 상한을 넘을 때만
+        # 스크롤하고 스크롤바를 보인다. 그 이하면 기존처럼 내용 높이 그대로.
+        wrap = tk.Frame(root, bg=BG)
+        wrap.pack(fill="x")
+        self.nw_canvas = tk.Canvas(wrap, bg=BG, highlightthickness=0, height=1)
+        self.nw_canvas.pack(side="left", fill="x", expand=True)
+        style = ttk.Style()
+        try:
+            style.theme_use("clam")   # 색을 존중하는 테마 (기본 win 테마는 무시)
+        except tk.TclError:
+            pass
+        style.configure(
+            "NW.Vertical.TScrollbar", background=CARD2, troughcolor=BG,
+            bordercolor=BG, arrowcolor=SUB, relief="flat",
+        )
+        style.map(
+            "NW.Vertical.TScrollbar",
+            background=[("active", HOVER)], arrowcolor=[("active", FG)],
+        )
+        self.nw_scroll = ttk.Scrollbar(
+            wrap, orient="vertical", command=self.nw_canvas.yview,
+            style="NW.Vertical.TScrollbar",
+        )
+        self.nw_canvas.configure(yscrollcommand=self.nw_scroll.set)
+        self._nw_scroll_shown = False
+
+        self.nw_list = tk.Frame(self.nw_canvas, bg=BG)
+        self._nw_win = self.nw_canvas.create_window(
+            (0, 0), window=self.nw_list, anchor="nw"
+        )
+        self.nw_list.bind("<Configure>", self._on_nw_frame_configure)
+        self.nw_canvas.bind("<Configure>", self._on_nw_canvas_configure)
+        # 마우스 휠은 커서가 목록 위에 있을 때만 (bind_all/unbind_all)
+        self.nw_canvas.bind(
+            "<Enter>", lambda e: self.nw_canvas.bind_all("<MouseWheel>", self._nw_wheel)
+        )
+        self.nw_canvas.bind(
+            "<Leave>", lambda e: self.nw_canvas.unbind_all("<MouseWheel>")
+        )
 
         # 사유 입력란 전용 폰트(명시적 객체) — 조합 폰트 지정에도 사용
         self.nw_font = tkfont.Font(family=FONT, size=10)
         self._nw_ime_px = self.nw_font.metrics("linespace")  # 조합 폰트 높이(px)
 
         # stop_id 별 위젯/값 추적 (사유 메모 보존 + 진행 중 구간 제자리 갱신)
-        self.nw_notes = {}     # stop_id -> StringVar
-        self.nw_entries = {}   # stop_id -> Entry
-        self.nw_rows = {}      # stop_id -> {"time":Label, "dur":Label}
-        self._nw_sig = None    # 행 구조가 바뀔 때만 다시 그리기 위한 시그니처
+        self.nw_notes = {}       # stop_id -> StringVar
+        self.nw_entries = {}     # stop_id -> Entry
+        self.nw_rows = {}        # stop_id -> {"time":Label, "dur":Label}
+        self.nw_placeholder = {} # stop_id -> bool (placeholder 표시 중 여부)
+        self.nw_saved = {}       # stop_id -> 마지막 저장된 사유(피드백 판정용)
+        self._nw_sig = None      # 행 구조가 바뀔 때만 다시 그리기 위한 시그니처
+
+    # ----- 비업무 목록 스크롤 처리 -----
+    def _on_nw_frame_configure(self, _e=None):
+        content_h = self.nw_list.winfo_reqheight()
+        view_h = min(content_h, NW_LIST_MAX_H)
+        self.nw_canvas.configure(
+            height=view_h, scrollregion=(0, 0, 0, content_h)
+        )
+        if content_h > NW_LIST_MAX_H:
+            if not self._nw_scroll_shown:
+                self.nw_scroll.pack(side="right", fill="y")
+                self._nw_scroll_shown = True
+        else:
+            if self._nw_scroll_shown:
+                self.nw_scroll.pack_forget()
+                self._nw_scroll_shown = False
+            self.nw_canvas.yview_moveto(0)
+
+    def _on_nw_canvas_configure(self, e):
+        # 내부 frame 너비를 캔버스 너비에 맞춰 사유 입력란이 늘어나게
+        self.nw_canvas.itemconfigure(self._nw_win, width=e.width)
+
+    def _nw_wheel(self, e):
+        if self._nw_scroll_shown:
+            self.nw_canvas.yview_scroll(int(-e.delta / 120), "units")
+
+    # ----- 비업무 날짜 이동 -----
+    def _nw_shift(self, delta):
+        nd = self._nw_day + timedelta(days=delta)
+        if nd > date.today():
+            return   # 오늘 이후로는 이동 금지
+        self._nw_day = nd
+        self._refresh_nonwork()
+
+    def _nw_goto_today(self):
+        self._nw_day = date.today()
+        self._refresh_nonwork()
+
+    def _nw_flash_saved(self):
+        """사유가 실제로 바뀌어 저장됐을 때만 잠깐 '사유 저장됨' 표시."""
+        self.lbl_nw_saved.config(text="사유 저장됨")
+        if self._nw_saved_after:
+            self.root.after_cancel(self._nw_saved_after)
+        self._nw_saved_after = self.root.after(
+            2000, lambda: self.lbl_nw_saved.config(text="")
+        )
 
     def _nw_focus_in(self, entry):
         """사유 입력란에서 한글 조합 폰트를 입력란 폰트에 맞춘다.
@@ -659,20 +807,51 @@ class Dashboard:
         set_ime_composition_font(FONT, self._nw_ime_px)
         self.root.after(0, lambda: set_ime_composition_font(FONT, self._nw_ime_px))
 
+    def _nw_entry_focus_in(self, stop_id, entry):
+        """포커스가 들어오면 placeholder 를 지우고 입력 색으로. 이어서 IME 폰트 처리."""
+        if self.nw_placeholder.get(stop_id):
+            self.nw_placeholder[stop_id] = False
+            var = self.nw_notes.get(stop_id)
+            if var is not None:
+                var.set("")
+            entry.config(fg=FG)
+        self._nw_focus_in(entry)
+
     def _nw_method(self, reason):
         label = S.NONWORK_REASON_LABELS.get(reason, "기타")
         color = self.NW_METHOD_COLORS.get(reason, SUB)
         return label, color
 
-    def _save_nw_note(self, stop_id):
+    def _nw_note_text(self, stop_id) -> str:
+        """placeholder 표시 중이면 실제 값이 아니므로 빈 문자열로 취급한다."""
+        if self.nw_placeholder.get(stop_id):
+            return ""
         var = self.nw_notes.get(stop_id)
-        if var is None:
+        return var.get() if var is not None else ""
+
+    def _save_nw_note(self, stop_id):
+        if stop_id not in self.nw_notes:
             return
+        text = self._nw_note_text(stop_id).strip()
+        prev = self.nw_saved.get(stop_id)
         st = S.Storage()
         try:
-            st.set_nonwork_note(stop_id, var.get())
+            st.set_nonwork_note(stop_id, text)
         finally:
             st.close()
+        self.nw_saved[stop_id] = text
+        # 값이 실제로 바뀌었을 때만 피드백 (FocusOut/재구성 flush 소음 방지)
+        if prev is not None and prev != text:
+            self._nw_flash_saved()
+
+    def _nw_focus_out(self, stop_id, entry):
+        """포커스가 빠지면: 비어 있으면 placeholder 복원 후 저장."""
+        var = self.nw_notes.get(stop_id)
+        if var is not None and not var.get().strip():
+            self.nw_placeholder[stop_id] = True
+            var.set("사유 입력…")
+            entry.config(fg=SUB)
+        self._save_nw_note(stop_id)
 
     def _flush_nw_notes(self):
         """행을 다시 그리기 전에 입력 중이던 사유를 모두 저장(유실 방지)."""
@@ -692,17 +871,22 @@ class Dashboard:
         dlbl.grid(row=r, column=2, sticky="w", padx=(0, 12), pady=3)
         self.nw_rows[sid] = {"time": tlbl, "dur": dlbl}
 
-        var = tk.StringVar(value=note)
+        # 사유가 비어 있으면 placeholder("사유 입력…", SUB 색)를 표시한다.
+        is_ph = not note
+        var = tk.StringVar(value=("사유 입력…" if is_ph else note))
+        self.nw_placeholder[sid] = is_ph
+        self.nw_saved[sid] = note   # 로드된 값 = 마지막 저장값(피드백 판정 기준)
         ent = tk.Entry(
-            self.nw_list, textvariable=var, bg=CARD2, fg=FG, insertbackground=FG,
+            self.nw_list, textvariable=var, bg=CARD2,
+            fg=(SUB if is_ph else FG), insertbackground=FG,
             relief="flat", font=self.nw_font,
         )
         ent.grid(row=r, column=3, sticky="ew", pady=3, ipady=3)
-        ent.bind("<FocusIn>", lambda e, en=ent: self._nw_focus_in(en))
+        ent.bind("<FocusIn>", lambda e, s=sid, en=ent: self._nw_entry_focus_in(s, en))
         # 조합 시작 때 Tk 가 폰트를 되돌리므로 키 입력마다 다시 적용
         ent.bind("<Key>", lambda e, en=ent: self._nw_focus_in(en))
         ent.bind("<Return>", lambda e, s=sid: (self._save_nw_note(s), self.root.focus()))
-        ent.bind("<FocusOut>", lambda e, s=sid: self._save_nw_note(s))
+        ent.bind("<FocusOut>", lambda e, s=sid, en=ent: self._nw_focus_out(s, en))
         self.nw_notes[sid] = var
         self.nw_entries[sid] = ent
 
@@ -713,9 +897,11 @@ class Dashboard:
         self.nw_notes.clear()
         self.nw_entries.clear()
         self.nw_rows.clear()
+        self.nw_placeholder.clear()
+        self.nw_saved.clear()
         if not periods:
             self._label(
-                self.nw_list, "오늘 기록된 비업무 구간이 없습니다.",
+                self.nw_list, "기록된 비업무 구간이 없습니다.",
                 fg=SUB, size=10, bg=BG,
             ).grid(row=0, column=0, sticky="w", pady=8)
             return
@@ -724,13 +910,21 @@ class Dashboard:
             self._build_nw_row(i, p, notes.get(p["stop_id"], ""))
 
     def _refresh_nonwork(self):
-        today = date.today()
+        day = self._nw_day
+        is_today = (day == date.today())
         self.lbl_nw_date.config(
-            text=f"{today:%Y년 %m월 %d일} ({WEEKDAY[today.weekday()]}) 비업무 기록"
+            text=f"{day:%Y년 %m월 %d일} ({WEEKDAY[day.weekday()]}) 비업무 기록"
         )
+        # ▶ 는 오늘 이후로 못 가게 비활성, "오늘" 버튼은 오늘이 아닐 때만 노출
+        self.btn_nw_next.config(state=("disabled" if is_today else "normal"))
+        if is_today:
+            self.btn_nw_today.pack_forget()
+        else:
+            self.btn_nw_today.pack(side="left", padx=(0, 6))
+
         st = S.Storage()
         try:
-            periods = st.nonwork_periods(today)
+            periods = st.nonwork_periods(day)
             notes = {p["stop_id"]: st.get_nonwork_note(p["stop_id"]) for p in periods}
         finally:
             st.close()
@@ -738,10 +932,13 @@ class Dashboard:
         total = sum(p["seconds"] for p in periods)
         self.lbl_nw_total.config(text=f"합계 {S.fmt_dur(total)}" if periods else "")
 
-        sig = tuple((p["stop_id"], p["ongoing"]) for p in periods)
+        # day 를 시그니처에 포함 → 날짜를 바꾸면 행이 재구성된다
+        # (재구성 경로가 먼저 _flush_nw_notes 를 호출하므로 입력 중 사유는 유실되지 않음)
+        sig = (day, tuple((p["stop_id"], p["ongoing"]) for p in periods))
         if sig != self._nw_sig:
             self._rebuild_nw_rows(periods, notes)
             self._nw_sig = sig
+            self._on_nw_frame_configure()   # 스크롤 영역/높이 재계산
             if getattr(self, "_active_tab", None) == "nonwork":
                 self._refit_height()
 
@@ -1078,6 +1275,12 @@ class Dashboard:
         ]
         week_total = sum(day_secs)
         scale = max(WORKDAY_SCALE_SEC, max(day_secs) if day_secs else 0, 1)
+
+        # 8시간 기준선을 현재 스케일 위치로 이동 (차트 세로 전체 관통)
+        bx = BAR_X0 + BAR_MAX * (WORKDAY_SCALE_SEC / scale)
+        self.chart.coords(
+            self.chart_baseline, bx, 2, bx, WEEKDAYS_SHOWN * ROW_H + 4
+        )
 
         for i, (d, sec) in enumerate(zip(days, day_secs)):
             leave = leaves.get(d)
