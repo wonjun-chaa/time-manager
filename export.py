@@ -11,11 +11,11 @@ CLI:
     py export.py --month 2026-06 --out "D:/내보내기"  # 출력 폴더 지정
 
 만들어지는 파일(구간 태그가 파일명에 붙는다):
-    daily_<태그>.csv     날짜·요일·출근·퇴근·체류·실업무·비업무·휴가출장·보정
+    daily_<태그>.csv     날짜·요일·출근·퇴근·체류·실업무·비업무·휴가출장반차·보정
     weekly_<태그>.csv    주(월~금)·근무일수·주간 실업무 합계·일 평균
     nonwork_<태그>.csv   날짜·방식·시작·끝·시간(분)·사유
 
-토·일과 기록이 전혀 없는 날(휴가/출장 표시도 없는 날)은 어느 파일에도 넣지 않는다.
+토·일과 기록이 전혀 없는 날(휴가/출장/반차 표시도 없는 날)은 어느 파일에도 넣지 않는다.
 """
 
 import os
@@ -75,11 +75,12 @@ def _collect(st: S.Storage, d1: date, d2: date):
     for day in _daterange(d1, d2):
         if day.weekday() >= 5:      # 토·일 제외
             continue
-        adjust = st.get_adjust_seconds(day)
+        adjust = st.total_adjust_seconds(day)
         leave = st.get_leave(day)
         work, nw = S.split_for_day(ivs, day, adjust, leave)
         first, last = S.day_bounds(ivs, day)
-        if first is None and not leave:   # 기록 없는 날 제외
+        # 기록도 휴가/출장/반차 표시도 수기 비업무도 없는 날은 제외
+        if first is None and not leave and not st.manual_nonwork_seconds(day):
             continue
         stay = S.stay_seconds(ivs, day)
         daily.append({
@@ -148,7 +149,7 @@ def export_range(d1: date, d2: date, out_dir: str | None = None, tag: str | None
 
     _write_csv(
         paths["daily"],
-        ["날짜", "요일", "출근", "퇴근", "체류", "실업무", "비업무", "휴가/출장", "보정"],
+        ["날짜", "요일", "출근", "퇴근", "체류", "실업무", "비업무", "휴가/출장/반차", "보정"],
         [
             [
                 f"{r['day']:%Y-%m-%d}",
@@ -186,8 +187,9 @@ def export_range(d1: date, d2: date, out_dir: str | None = None, tag: str | None
             [
                 f"{n['day']:%Y-%m-%d}",
                 n["method"],
-                f"{n['start']:%H:%M}",
-                "진행 중" if n["ongoing"] else f"{n['end']:%H:%M}",
+                f"{n['start']:%H:%M}" if n["start"] else "",
+                ("진행 중" if n["ongoing"]
+                 else (f"{n['end']:%H:%M}" if n["end"] else "")),
                 n["minutes"],
                 n["note"],
             ]

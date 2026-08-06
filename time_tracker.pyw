@@ -195,7 +195,7 @@ class Tracker:
         def work(day):
             return S.split_for_day(
                 ivs, day,
-                self.storage.get_adjust_seconds(day),
+                self.storage.total_adjust_seconds(day),
                 self.storage.get_leave(day),
             )[0]
 

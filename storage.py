@@ -33,22 +33,32 @@ DEFAULT_SETTINGS = {
 # 날짜별 비업무시간 수기 보정 (meta 테이블 'adjust:<날짜>')
 ADJUST_PREFIX = "adjust:"
 
-# 날짜별 휴가/출장 표시 (meta 'leave:<날짜>' = 'vacation'|'trip').
-# 표시된 날은 실제 기록과 무관하게 LEAVE_DEFAULT_SEC(8시간)으로 채운다.
+# 날짜별 휴가/출장/반차 표시 (meta 'leave:<날짜>' = 'vacation'|'trip'|'halfday').
+#   - 휴가/출장: 실제 기록과 무관하게 하루를 LEAVE_DEFAULT_SEC(8시간)으로 채운다.
+#   - 반차: 반나절만 쉬므로 실제 기록한 업무시간에 LEAVE_HALF_SEC(4시간)을 더한다.
 LEAVE_PREFIX = "leave:"
-LEAVE_LABELS = {"vacation": "휴가", "trip": "출장"}
+LEAVE_LABELS = {"vacation": "휴가", "trip": "출장", "halfday": "반차"}
+LEAVE_FULL_KINDS = ("vacation", "trip")   # 하루를 통째로 채우는 표시
+LEAVE_HALF = "halfday"                    # 실 기록에 4시간을 가산하는 표시
 LEAVE_DEFAULT_SEC = 8 * 3600
+LEAVE_HALF_SEC = 4 * 3600
 
-# 비업무(일시정지) 구간의 사유 텍스트 (meta 'nwnote:<stop이벤트 id>').
-# 구간을 일으킨 stop 이벤트의 id 에 묶어 저장하므로 날짜가 지나도 안정적으로 유지된다.
+# 비업무(일시정지) 구간의 사유 텍스트 (meta 'nwnote:<구간 키>').
+# 구간을 일으킨 stop 이벤트의 id(수기 추가 구간은 'm<행 id>')에 묶어 저장하므로
+# 날짜가 지나도 안정적으로 유지된다.
 NONWORK_NOTE_PREFIX = "nwnote:"
+# 수기로 추가한 비업무 구간의 키 접두사 ('m3' = manual_nonwork.id 3).
+MANUAL_KEY_PREFIX = "m"
+MANUAL_REASON = "manual"
 # 일시정지를 유발한 stop reason → 카운팅 방식 한글 라벨.
+# ('manual' 만은 이벤트가 아닌 수기 추가 구간용 라벨 - 목록/내보내기에서 함께 쓴다.)
 NONWORK_REASON_LABELS = {
     "idle": "자리비움",
     "lock": "화면잠금",
     "screensaver": "화면보호기",
     "manual_pause": "수동 일시정지",
     "settings_change": "설정 변경",
+    MANUAL_REASON: "수기 추가",
 }
 
 
@@ -89,6 +99,21 @@ def _parse(s: str) -> datetime:
     return datetime.strptime(s, "%Y-%m-%dT%H:%M:%S")
 
 
+def is_manual_key(key) -> bool:
+    """구간 키가 수기 추가 구간('m3')인지 (이벤트 id 인 정수와 구분)."""
+    return isinstance(key, str) and key.startswith(MANUAL_KEY_PREFIX)
+
+
+def _manual_row_id(key):
+    """'m3' → 3. 수기 구간 키가 아니면 None."""
+    if not is_manual_key(key):
+        return None
+    try:
+        return int(key[len(MANUAL_KEY_PREFIX):])
+    except ValueError:
+        return None
+
+
 class Storage:
     def __init__(self, path: str | None = None):
         self.path = path or db_path()
@@ -113,6 +138,22 @@ class Storage:
         c.execute("CREATE INDEX IF NOT EXISTS idx_events_ts ON events(ts)")
         c.execute(
             "CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT)"
+        )
+        # 현황 탭에서 '＋ 비업무 추가' 로 직접 넣은 비업무 구간.
+        # 이벤트로 남길 수 없는(감지되지 않은) 자리비움을 목록에 보이게 하려는 것으로,
+        # 이 합계가 곧 그 날 비업무 보정의 '+' 쪽이다 (total_adjust_seconds 참고).
+        c.execute(
+            """
+            CREATE TABLE IF NOT EXISTS manual_nonwork (
+                id      INTEGER PRIMARY KEY AUTOINCREMENT,
+                day     TEXT NOT NULL,      -- YYYY-MM-DD
+                seconds INTEGER NOT NULL,
+                created TEXT NOT NULL
+            )
+            """
+        )
+        c.execute(
+            "CREATE INDEX IF NOT EXISTS idx_manual_day ON manual_nonwork(day)"
         )
         c.commit()
 
@@ -200,6 +241,83 @@ class Storage:
         self.set_adjust_seconds(day, new)
         return new
 
+    def total_adjust_seconds(self, day: date) -> int:
+        """그 날 비업무에 반영할 보정 총합 = 수기 구간 합계 + adjust 메타값.
+
+        '＋ 비업무 추가' 는 목록에 보이도록 manual_nonwork 행으로,
+        '− 비업무 빼기' 의 잔여분은 adjust 메타값으로 남는다. split_for_day 에
+        넘기는 adjust_sec 은 항상 이 함수의 값이어야 두 경로가 중복/누락 없이 합쳐진다.
+        """
+        return self.manual_nonwork_seconds(day) + self.get_adjust_seconds(day)
+
+    # ----- 수기로 추가한 비업무 구간 -----
+    def add_manual_nonwork(self, day: date, seconds: int, note: str = "") -> str:
+        """수기 비업무 구간을 추가하고 구간 키('m<id>')를 반환."""
+        cur = self.conn.execute(
+            "INSERT INTO manual_nonwork (day, seconds, created) VALUES (?, ?, ?)",
+            (day.isoformat(), int(seconds), _iso(_now())),
+        )
+        self.conn.commit()
+        key = MANUAL_KEY_PREFIX + str(cur.lastrowid)
+        if note:
+            self.set_nonwork_note(key, note)
+        return key
+
+    def manual_nonwork_seconds(self, day: date) -> int:
+        row = self.conn.execute(
+            "SELECT COALESCE(SUM(seconds), 0) AS s FROM manual_nonwork WHERE day=?",
+            (day.isoformat(),),
+        ).fetchone()
+        return int(row["s"])
+
+    def delete_manual_nonwork(self, key) -> bool:
+        """수기 비업무 구간('m<id>')과 그 사유 메모를 지운다."""
+        rid = _manual_row_id(key)
+        if rid is None:
+            return False
+        cur = self.conn.execute("DELETE FROM manual_nonwork WHERE id=?", (rid,))
+        if not cur.rowcount:
+            self.conn.commit()
+            return False
+        self.conn.execute(
+            "DELETE FROM meta WHERE key=?",
+            (NONWORK_NOTE_PREFIX + MANUAL_KEY_PREFIX + str(rid),),
+        )
+        self.conn.commit()
+        return True
+
+    def reduce_manual_nonwork(self, day: date, seconds: int) -> int:
+        """수기 구간을 최근 것부터 seconds 만큼 줄이고, 남은(못 줄인) 초를 반환.
+
+        '− 비업무 빼기' 가 방금 추가한 수기 구간을 그대로 두고 음수 보정만 쌓아
+        목록과 숫자가 어긋나는 일을 막는다. 0 이 된 구간은 삭제한다.
+        """
+        left = int(seconds)
+        rows = self.conn.execute(
+            "SELECT id, seconds FROM manual_nonwork WHERE day=? ORDER BY id DESC",
+            (day.isoformat(),),
+        ).fetchall()
+        for r in rows:
+            if left <= 0:
+                break
+            if r["seconds"] <= left:
+                left -= r["seconds"]
+                self.delete_manual_nonwork(MANUAL_KEY_PREFIX + str(r["id"]))
+            else:
+                self.conn.execute(
+                    "UPDATE manual_nonwork SET seconds=? WHERE id=?",
+                    (r["seconds"] - left, r["id"]),
+                )
+                self.conn.commit()
+                left = 0
+        return left
+
+    def clear_manual_nonwork(self, day: date):
+        for r in self.conn.execute(
+            "SELECT id FROM manual_nonwork WHERE day=?", (day.isoformat(),)
+        ).fetchall():
+            self.delete_manual_nonwork(MANUAL_KEY_PREFIX + str(r["id"]))
+
     # ----- 휴가/출장 표시 (날짜별) -----
     def get_leave(self, day: date) -> str | None:
         v = self.get_meta(LEAVE_PREFIX + day.isoformat())
@@ -232,11 +350,13 @@ class Storage:
     def nonwork_periods(self, day: date):
         """해당 날짜에 업무시간에서 빠진(일시정지) 구간 목록을 반환.
 
-        각 항목 dict: stop_id, start, end, seconds, reason, ongoing.
+        각 항목 dict: stop_id, start, end, seconds, reason, ongoing, manual.
           - 활동 구간 사이의 공백이 곧 비업무 구간이고, 그 사유(카운팅 방식)는
             공백을 시작시킨 stop 이벤트의 reason 이다(idle/lock/screensaver...).
           - 체류시간(첫~마지막 활동) 안의 공백만 포함한다(출근 전/퇴근 후 제외).
           - 현재 일시정지 중이면 진행 중(ongoing=True) 구간을 now 까지로 추가한다.
+          - 현황 탭에서 수기로 추가한 구간(manual=True)을 목록 끝에 붙인다.
+            시각이 없으므로 start/end 는 None 이고 reason 은 MANUAL_REASON.
         stop_id 는 사유 메모(get/set_nonwork_note)의 안정적 키로 쓰인다.
         """
         rows = self.conn.execute(
@@ -266,41 +386,88 @@ class Storage:
         plain = [(s, e) for (s, e, _, _) in seq]
         first, last = day_bounds(plain, day)
         periods = []
-        if first is None:
-            return periods
 
-        for i in range(len(seq) - 1):
-            g_start = seq[i][1]
-            g_end = seq[i + 1][0]
-            if g_end <= g_start:
-                continue
-            if g_start < first or g_end > last:
-                continue  # 체류시간 밖은 비업무가 아님
+        if first is not None:
+            for i in range(len(seq) - 1):
+                g_start = seq[i][1]
+                g_end = seq[i + 1][0]
+                if g_end <= g_start:
+                    continue
+                if g_start < first or g_end > last:
+                    continue  # 체류시간 밖은 비업무가 아님
+                periods.append({
+                    "stop_id": seq[i][2],          # 공백을 시작시킨 stop 이벤트
+                    "start": g_start,
+                    "end": g_end,
+                    "seconds": (g_end - g_start).total_seconds(),
+                    "reason": seq[i][3],
+                    "ongoing": False,
+                    "manual": False,
+                })
+
+            # 현재 일시정지 중(마지막 이벤트가 stop, 아직 재개 전)이면 진행 중 구간 추가
+            if rows and rows[-1]["kind"] == "stop":
+                last_stop = rows[-1]
+                if last_stop["reason"] in NONWORK_REASON_LABELS:
+                    g_start = _parse(last_stop["ts"])
+                    now = _now()
+                    if g_start.date() == day and now > g_start and g_start >= first:
+                        periods.append({
+                            "stop_id": last_stop["id"],
+                            "start": g_start,
+                            "end": now,
+                            "seconds": (now - g_start).total_seconds(),
+                            "reason": last_stop["reason"],
+                            "ongoing": True,
+                            "manual": False,
+                        })
+
+        # 수기 추가 구간 (기록이 없는 날에도 보여야 하므로 체류 여부와 무관하게 붙인다)
+        for r in self.conn.execute(
+            "SELECT id, seconds FROM manual_nonwork WHERE day=? ORDER BY id ASC",
+            (day.isoformat(),),
+        ).fetchall():
             periods.append({
-                "stop_id": seq[i][2],          # 공백을 시작시킨 stop 이벤트
-                "start": g_start,
-                "end": g_end,
-                "seconds": (g_end - g_start).total_seconds(),
-                "reason": seq[i][3],
+                "stop_id": MANUAL_KEY_PREFIX + str(r["id"]),
+                "start": None,
+                "end": None,
+                "seconds": float(r["seconds"]),
+                "reason": MANUAL_REASON,
                 "ongoing": False,
+                "manual": True,
             })
-
-        # 현재 일시정지 중(마지막 이벤트가 stop, 아직 재개 전)이면 진행 중 구간 추가
-        if rows and rows[-1]["kind"] == "stop":
-            last_stop = rows[-1]
-            if last_stop["reason"] in NONWORK_REASON_LABELS:
-                g_start = _parse(last_stop["ts"])
-                now = _now()
-                if g_start.date() == day and now > g_start and g_start >= first:
-                    periods.append({
-                        "stop_id": last_stop["id"],
-                        "start": g_start,
-                        "end": now,
-                        "seconds": (now - g_start).total_seconds(),
-                        "reason": last_stop["reason"],
-                        "ongoing": True,
-                    })
         return periods
+
+    def delete_nonwork_period(self, stop_id) -> bool:
+        """비업무 구간을 삭제해 앞뒤 활동 구간을 하나로 잇는다(= 업무시간으로 편입).
+
+        구간을 만든 stop 이벤트와, 그 뒤 처음 오는 start 이벤트(= 구간의 끝)를 함께
+        지운다. 두 경계가 사라지면 intervals() 페어링에서 앞 구간이 그대로 이어지므로
+        공백이 업무시간에 흡수되고, 체류시간은 그대로다. 사유 메모도 함께 지운다.
+        진행 중(아직 재개 전) 구간은 이을 start 가 없어 삭제할 수 없다(False 반환).
+        수기 추가 구간('m<id>')이면 그 행만 지운다(= 그만큼 보정이 줄어든다).
+        """
+        if is_manual_key(stop_id):
+            return self.delete_manual_nonwork(stop_id)
+        row = self.conn.execute(
+            "SELECT kind FROM events WHERE id=?", (stop_id,)
+        ).fetchone()
+        if row is None or row["kind"] != "stop":
+            return False
+        nxt = self.conn.execute(
+            "SELECT id FROM events WHERE id>? AND kind='start' ORDER BY id ASC LIMIT 1",
+            (stop_id,),
+        ).fetchone()
+        if nxt is None:
+            return False
+        self.conn.execute(
+            "DELETE FROM events WHERE id IN (?, ?)", (stop_id, nxt["id"])
+        )
+        self.conn.execute(
+            "DELETE FROM meta WHERE key=?", (NONWORK_NOTE_PREFIX + str(stop_id),)
+        )
+        self.conn.commit()
+        return True
 
     def ongoing_pause_now(self, day: date) -> datetime | None:
         """현재 일시정지 중이면(마지막 이벤트가 비업무성 stop) now 를 반환.
@@ -437,15 +604,20 @@ def split_for_day(intervals, day: date, adjust_sec: float = 0.0,
     더해지고, 그만큼 업무에서 빠진다. 업무+비업무 = 체류 불변식을 유지하며
     [0, 체류] 범위로 클립한다.
 
+    반차(LEAVE_HALF)는 위 계산을 그대로 한 뒤 업무시간에 4시간을 더한다.
+    쉬는 반나절은 기록이 없으므로, 이때만 '업무+비업무 = 체류' 가 깨진다.
+
     pause_until 은 진행 중 일시정지를 실시간 반영하기 위한 연장 시각.
     """
-    if leave_kind in LEAVE_LABELS:
+    if leave_kind in LEAVE_FULL_KINDS:
         return float(LEAVE_DEFAULT_SEC), 0.0
     base_work = seconds_for_day(intervals, day)
     stay = stay_seconds(intervals, day, pause_until)
     base_nonwork = max(0.0, stay - base_work)
     nonwork = min(max(0.0, base_nonwork + adjust_sec), stay)
     work = stay - nonwork
+    if leave_kind == LEAVE_HALF:
+        work += LEAVE_HALF_SEC
     return work, nonwork
 
 

@@ -30,9 +30,9 @@ def build_report(target: date) -> str:
     try:
         ivs = st.intervals()
         days = [monday + timedelta(days=i) for i in range(5)]   # 월~금
-        adjusts = {d: st.get_adjust_seconds(d) for d in days}
+        adjusts = {d: st.total_adjust_seconds(d) for d in days}
         leaves = {d: st.get_leave(d) for d in days}
-        target_adj = st.get_adjust_seconds(target)
+        target_adj = st.total_adjust_seconds(target)
         target_leave = st.get_leave(target)
     finally:
         st.close()
@@ -47,7 +47,8 @@ def build_report(target: date) -> str:
     first, last = S.day_bounds(ivs, target)
     lines.append(f"\n[{target:%Y-%m-%d} ({WEEKDAY_KR[target.weekday()]})] 일일 현황")
     if target_leave:
-        lines.append(f"  표시          : {S.LEAVE_LABELS[target_leave]} (8시간 기본)")
+        note = "4시간 가산" if target_leave == S.LEAVE_HALF else "8시간 기본"
+        lines.append(f"  표시          : {S.LEAVE_LABELS[target_leave]} ({note})")
     if first:
         lines.append(f"  출근(첫 활동) : {first:%H:%M}")
         lines.append(f"  마지막 활동   : {last:%H:%M}")

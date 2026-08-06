@@ -13,7 +13,7 @@ import subprocess
 import tkinter as tk
 import tkinter.font as tkfont
 import tkinter.ttk as ttk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 import ctypes
 from ctypes import wintypes
 from datetime import date, datetime, timedelta
@@ -44,9 +44,20 @@ TOGGLE_ON_DIS = "#34493f"
 TOGGLE_OFF_DIS = "#2c313c"
 TOGGLE_KNOB_DIS = "#737a8c"
 
-# 휴가/출장 색
-VAC = "#9b8cff"          # 휴가 - 라벤더
-TRIP = "#5cc0a0"         # 출장 - 청록
+# 근무/출장/휴가/반차 색 - 채도를 낮춘 차분한 톤 (막대·요일 버튼 공용).
+# UI 강조색(ACCENT/TODAY)은 그대로 두고, 상태 표시에만 이 팔레트를 쓴다.
+BAR_WORK = "#6e9aba"     # 근무 (지난 날) - 가라앉은 파랑
+BAR_TODAY = "#c2a770"    # 근무 (오늘) - 가라앉은 호박색
+TRIP = "#59a68f"         # 출장 - 탁한 청록
+VAC = "#8b81bb"          # 휴가 - 탁한 보라
+HALF = "#bb8194"         # 반차 - 탁한 자주
+WARN = "#d98b8b"         # 삭제 등 되돌릴 수 없는 동작
+
+LEAVE_COLORS = {"trip": TRIP, "vacation": VAC, "halfday": HALF}
+
+# 비업무 목록의 방식별 색 (위 팔레트와 같은 톤으로 맞춘다)
+NW_PAUSE = "#6fae8b"     # 수동 일시정지
+NW_MANUAL = "#7fa8ad"    # 수기 추가
 
 WEEKDAYS_SHOWN = 5       # 주간 표시 일수 (월~금, 토·일 제외)
 
@@ -554,29 +565,23 @@ class Dashboard:
 
     def _build_adjust_body(self, body):
         ctl = tk.Frame(body, bg=CARD)
-        ctl.pack(fill="x", pady=(10, 0))
+        ctl.pack(fill="x", pady=(10, 2))
         self.adjust_stepper = Stepper(ctl, value=10, lo=1, hi=600)
         self.adjust_stepper.frame.pack(side="left")
         self._label(ctl, "분", fg=SUB, size=9).pack(side="left", padx=(6, 10))
         self._adj_btn(ctl, "− 비업무 빼기", lambda: self._apply_adjust(-1), ACCENT)
         self._adj_btn(ctl, "＋ 비업무 추가", lambda: self._apply_adjust(+1), TODAY)
         self._adj_btn(ctl, "초기화", self._reset_adjust, SUB)
-        self._label(
-            body, "뺄 수 있는 한도 = 비업무 시간, 더할 수 있는 한도 = 실 업무 시간.",
-            fg=SUB, size=8,
-        ).pack(anchor="w", pady=(6, 0))
 
-    # ----- 휴가 · 출장 표시 -----
+    # ----- 출장 · 휴가 · 반차 표시 -----
     def _build_leave(self, card):
         _, self._leave_toggle = self._collapsible(
-            card, "휴가 · 출장 표시", self._build_leave_body
+            card, "출장 · 휴가 · 반차 표시", self._build_leave_body
         )
 
     def _build_leave_body(self, body):
         self._label(
-            body, "요일을 누를 때마다  근무 → 휴가 → 출장  순으로 바뀝니다. "
-            "표시한 날은 8시간으로 채워집니다.",
-            fg=SUB, size=8,
+            body, "근무 → 출장 → 휴가 → 반차", fg=SUB, size=8,
         ).pack(anchor="w", pady=(10, 6))
         row = tk.Frame(body, bg=CARD)
         row.pack(fill="x")
@@ -594,7 +599,7 @@ class Dashboard:
     def _cycle_leave(self, i):
         monday, _ = S.week_range(date.today())
         d = monday + timedelta(days=i)
-        order = [None, "vacation", "trip"]
+        order = [None, "trip", "vacation", "halfday"]
         st = S.Storage()
         try:
             cur = st.get_leave(d)
@@ -631,6 +636,7 @@ class Dashboard:
         return f"{sign}{S.fmt_hm(abs(sec))}"
 
     def _apply_adjust(self, sign: int):
+        """오늘의 비업무 보정. 추가분은 비업무 탭에 보이도록 수기 구간으로 남긴다."""
         minutes = self.adjust_stepper.value()
         delta = sign * minutes * 60
         today = date.today()
@@ -640,30 +646,55 @@ class Dashboard:
             base_work = S.seconds_for_day(ivs, today)
             stay = S.stay_seconds(ivs, today, st.ongoing_pause_now(today))
             base_nonwork = max(0.0, stay - base_work)
-            # 비업무 = base_nonwork + adjust 가 [0, 체류] 안에 머물도록 보정값 제한.
-            #   ⇒ adjust ∈ [-비업무(다 뺄 수 있는 한도), +실업무(다 더할 수 있는 한도)]
+            # 비업무 = base_nonwork + 보정 이 [0, 체류] 안에 머물도록 총 보정을 제한.
+            #   ⇒ 보정 ∈ [-비업무(다 뺄 수 있는 한도), +실업무(다 더할 수 있는 한도)]
             lo = -int(round(base_nonwork))
             hi = int(round(base_work))
-            new = max(lo, min(hi, st.get_adjust_seconds(today) + delta))
-            st.set_adjust_seconds(today, new)
+            total = st.total_adjust_seconds(today)
+            applied = max(lo, min(hi, total + delta)) - total
+            if applied > 0:
+                # 추가는 목록에 한 줄로 남겨 사유를 적을 수 있게 한다
+                st.add_manual_nonwork(today, applied)
+            elif applied < 0:
+                # 빼기는 최근 수기 구간부터 지우고, 모자란 만큼만 음수 보정으로
+                left = st.reduce_manual_nonwork(today, -applied)
+                if left:
+                    st.add_adjust_seconds(today, -left)
         finally:
             st.close()
         self._refresh()
+        self._refresh_nonwork()
 
     def _reset_adjust(self):
+        today = date.today()
         st = S.Storage()
         try:
-            st.set_adjust_seconds(date.today(), 0)
+            has_manual = st.manual_nonwork_seconds(today) > 0
+        finally:
+            st.close()
+        if has_manual and not messagebox.askyesno(
+            "보정 초기화",
+            "오늘 보정을 모두 되돌릴까요?\n\n"
+            "수기로 추가한 비업무 구간과 그 사유도 함께 지워집니다.",
+            parent=self.root,
+        ):
+            return
+        st = S.Storage()
+        try:
+            st.set_adjust_seconds(today, 0)
+            st.clear_manual_nonwork(today)
         finally:
             st.close()
         self._refresh()
+        self._refresh_nonwork()
 
     # ----- 비업무(일시정지) 기록 탭 -----
     NW_METHOD_COLORS = {
-        "idle": TODAY,          # 자리비움 - 호박색
-        "lock": ACCENT,         # 화면잠금 - 파랑
-        "screensaver": VAC,     # 화면보호기 - 라벤더
-        "manual_pause": GOOD,   # 수동 일시정지 - 초록
+        "idle": BAR_TODAY,        # 자리비움 - 호박색
+        "lock": BAR_WORK,         # 화면잠금 - 파랑
+        "screensaver": VAC,       # 화면보호기 - 보라
+        "manual_pause": NW_PAUSE,  # 수동 일시정지 - 초록
+        "manual": NW_MANUAL,      # 수기 추가 - 청회색
         "settings_change": SUB,
     }
 
@@ -675,7 +706,7 @@ class Dashboard:
         self._nw_day = date.today()
 
         head = tk.Frame(root, bg=BG)
-        head.pack(fill="x", pady=(0, 6))
+        head.pack(fill="x", pady=(0, 10))
         nav = tk.Frame(head, bg=BG)
         nav.pack(side="left")
         self.btn_nw_prev = self._adj_btn(nav, "◀", lambda: self._nw_shift(-1), FG)
@@ -693,12 +724,6 @@ class Dashboard:
         self.lbl_nw_saved = self._label(head, fg=GOOD, size=9, bold=True, bg=BG)
         self.lbl_nw_saved.pack(side="right", padx=(0, 12))
         self._nw_saved_after = None
-
-        self._label(
-            root,
-            "업무시간에서 빠진(일시정지) 구간입니다. 사유는 직접 입력하면 저장됩니다.",
-            fg=SUB, size=9, bg=BG,
-        ).pack(anchor="w", pady=(0, 8))
 
         # 스크롤 영역: 캔버스 + 내부 frame(=nw_list). 목록 높이가 상한을 넘을 때만
         # 스크롤하고 스크롤바를 보인다. 그 이하면 기존처럼 내용 높이 그대로.
@@ -890,6 +915,49 @@ class Dashboard:
         self.nw_notes[sid] = var
         self.nw_entries[sid] = ent
 
+        # 진행 중 구간은 이을 상대(재개 start)가 아직 없어 삭제할 수 없다
+        if not p["ongoing"]:
+            self._nw_del_btn(r, sid)
+
+    def _nw_del_btn(self, r, sid):
+        b = tk.Button(
+            self.nw_list, text="삭제", font=(FONT, 9),
+            bg=BG, fg=SUB, activebackground=CARD2, activeforeground=WARN,
+            relief="flat", bd=0, padx=8, pady=1, cursor="hand2", takefocus=0,
+            command=lambda: self._delete_nw(sid),
+        )
+        b.grid(row=r, column=4, sticky="e", padx=(10, 0), pady=3)
+        b.bind("<Enter>", lambda e: b.config(fg=WARN))
+        b.bind("<Leave>", lambda e: b.config(fg=SUB))
+
+    def _delete_nw(self, stop_id):
+        """비업무 구간을 지워 그 시간을 업무시간으로 되돌린다 (현황에도 반영)."""
+        if S.is_manual_key(stop_id):
+            detail = "수기로 추가한 구간이 사라져 비업무 보정이 그만큼 줄어들고,"
+        else:
+            detail = "앞뒤 활동이 하나로 이어져 해당 시간이 업무시간에 포함되고,"
+        if not messagebox.askyesno(
+            "비업무 구간 삭제",
+            "이 비업무 구간을 삭제할까요?\n\n"
+            f"{detail}\n입력한 사유도 함께 지워집니다. 되돌릴 수 없습니다.",
+            parent=self.root,
+        ):
+            return
+        st = S.Storage()
+        try:
+            ok = st.delete_nonwork_period(stop_id)
+        finally:
+            st.close()
+        if not ok:
+            return
+        # 재구성 전 flush 가 지운 사유를 되살리지 않도록 추적 정보를 먼저 제거
+        for d in (self.nw_notes, self.nw_entries, self.nw_rows,
+                  self.nw_placeholder, self.nw_saved):
+            d.pop(stop_id, None)
+        self._nw_sig = None      # 행 구조가 바뀌었으므로 강제 재구성
+        self._refresh_nonwork()
+        self._refresh()
+
     def _rebuild_nw_rows(self, periods, notes):
         self._flush_nw_notes()
         for w in self.nw_list.winfo_children():
@@ -947,8 +1015,11 @@ class Dashboard:
             r = self.nw_rows.get(p["stop_id"])
             if not r:
                 continue
-            end_txt = "진행 중" if p["ongoing"] else f"{p['end']:%H:%M}"
-            r["time"].config(text=f"{p['start']:%H:%M} → {end_txt}")
+            if p["start"] is None:      # 수기 추가 구간 - 시각 없음
+                r["time"].config(text="—")
+            else:
+                end_txt = "진행 중" if p["ongoing"] else f"{p['end']:%H:%M}"
+                r["time"].config(text=f"{p['start']:%H:%M} → {end_txt}")
             r["dur"].config(text=S.fmt_dur(p["seconds"]))
 
     # ----- 설정 레이아웃 -----
@@ -1216,10 +1287,10 @@ class Dashboard:
             today = date.today()
             monday, _ = S.week_range(today)
             days = [monday + timedelta(days=i) for i in range(WEEKDAYS_SHOWN)]
-            adjusts = {d: st.get_adjust_seconds(d) for d in days}
+            adjusts = {d: st.total_adjust_seconds(d) for d in days}
             leaves = {d: st.get_leave(d) for d in days}
             # 오늘이 주말이면 days 에 없으므로 오늘 값도 따로 챙긴다 (오늘 카드용)
-            adjusts.setdefault(today, st.get_adjust_seconds(today))
+            adjusts.setdefault(today, st.total_adjust_seconds(today))
             leaves.setdefault(today, st.get_leave(today))
             pause_until = st.ongoing_pause_now(today)
             return ivs, last, adjusts, leaves, pause_until
@@ -1292,12 +1363,7 @@ class Dashboard:
             )
             w = int(BAR_MAX * min(1.0, sec / scale))
             self.chart.coords(bar_id, BAR_X0, y - 8, BAR_X0 + max(w, 0), y + 8)
-            if leave == "vacation":
-                bar_fill = VAC
-            elif leave == "trip":
-                bar_fill = TRIP
-            else:
-                bar_fill = TODAY if is_today else ACCENT
+            bar_fill = LEAVE_COLORS.get(leave) or (BAR_TODAY if is_today else BAR_WORK)
             self.chart.itemconfig(
                 bar_id, fill=bar_fill, state=("normal" if sec > 0 else "hidden"),
             )
@@ -1307,13 +1373,13 @@ class Dashboard:
                 vtext, vcol = ("-" if sec == 0 else S.fmt_hm(sec)), (FG if sec else SUB)
             self.chart.itemconfig(val_id, text=vtext, fill=vcol)
 
-            # 휴가/출장 버튼 라벨·색 갱신
+            # 휴가/출장/반차 버튼 라벨·색 갱신
             btn = self.leave_btns[i]
             label = f"{WEEKDAY[d.weekday()]} {d:%m.%d}"
-            if leave == "vacation":
-                btn.config(text=f"{label}\n휴가", fg=BG, bg=VAC, activebackground=VAC)
-            elif leave == "trip":
-                btn.config(text=f"{label}\n출장", fg=BG, bg=TRIP, activebackground=TRIP)
+            if leave:
+                col = LEAVE_COLORS[leave]
+                btn.config(text=f"{label}\n{S.LEAVE_LABELS[leave]}",
+                           fg=BG, bg=col, activebackground=col)
             else:
                 btn.config(text=f"{label}\n근무", fg=SUB, bg=CARD2, activebackground=HOVER)
 
