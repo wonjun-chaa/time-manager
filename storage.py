@@ -22,11 +22,19 @@ APP_NAME = "TimeTracker"
 # 트레이 앱과 대시보드(별도 프로세스)가 DB 를 통해 공유하므로,
 # 대시보드에서 바꾼 값이 트레이 앱 폴링 주기 내에 반영된다.
 SETTING_PREFIX = "setting:"
+# 하루 목표 업무시간 기본값. 달성하면 트레이 앱이 팝업으로 한 번 알린다.
+# 실제 값은 설정('goal_sec')에서 읽는다.
+DAILY_GOAL_SEC = 8 * 3600
+# 마지막으로 목표 달성 알림을 띄운 날짜(meta). 하루 한 번만 뜨게 하는 표식.
+GOAL_NOTIFIED_KEY = "goal_notified"
+
 DEFAULT_SETTINGS = {
     "idle_enabled": True,         # 자리비움(미입력) 감지로 일시정지
     "idle_threshold_sec": 180,    # 미입력 임계 시간(초). 기본 3분
     "lock_enabled": True,         # 화면 잠금으로 일시정지
     "screensaver_enabled": True,  # 화면보호기로 일시정지
+    "goal_alarm_enabled": True,   # 목표 시간 달성 시 팝업 알림
+    "goal_sec": DAILY_GOAL_SEC,   # 목표 업무시간(초). 기본 8시간
 }
 
 
@@ -222,6 +230,18 @@ class Storage:
         else:
             raw = str(value)
         self.set_meta(SETTING_PREFIX + key, raw)
+
+    # ----- 목표 달성 알림 (하루 한 번) -----
+    def goal_notified(self, day: date) -> bool:
+        return self.get_meta(GOAL_NOTIFIED_KEY) == day.isoformat()
+
+    def set_goal_notified(self, day: date):
+        self.set_meta(GOAL_NOTIFIED_KEY, day.isoformat())
+
+    def clear_goal_notified(self):
+        """알림 표식을 지워 다시 알릴 수 있게 한다(목표 시간을 바꿨을 때)."""
+        self.conn.execute("DELETE FROM meta WHERE key=?", (GOAL_NOTIFIED_KEY,))
+        self.conn.commit()
 
     # ----- 비업무시간 수기 보정 (날짜별) -----
     # meta 테이블에 'adjust:YYYY-MM-DD' = 부호 있는 초. 양수면 비업무를 늘려

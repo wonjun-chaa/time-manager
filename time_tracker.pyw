@@ -38,6 +38,12 @@ WTS_SESSION_UNLOCK = 0x8
 NOTIFY_FOR_THIS_SESSION = 0
 SPI_GETSCREENSAVERRUNNING = 0x0072
 
+# MessageBoxW 플래그 (목표 달성 팝업)
+MB_OK = 0x00000000
+MB_ICONINFORMATION = 0x00000040
+MB_SETFOREGROUND = 0x00010000
+MB_TOPMOST = 0x00040000
+
 HEARTBEAT_SEC = 30          # 활동 중 마지막 활동시각 저장 주기
 POLL_SEC = 2               # 화면보호기/자리비움 감지 주기
 IDLE_THRESHOLD_SEC = 180   # 입력 없음 임계 기본값(초). 실제 값은 설정에서 읽음
@@ -315,6 +321,10 @@ class App:
                 self.tracker.heartbeat()
                 last_hb = now
 
+            # 목표 시간 달성 알림 - 설정에서 끄면 건너뛴다
+            if settings.get("goal_alarm_enabled"):
+                self._check_goal(settings.get("goal_sec", S.DAILY_GOAL_SEC))
+
             # 트레이 툴팁 갱신 (호버 시 최신 시간 표시)
             self._update_tooltip()
 
@@ -354,6 +364,40 @@ class App:
                 self.icon.notify(msg, title)
         except Exception:
             pass
+
+    def _popup(self, msg, title="TimeTracker"):
+        """모달 팝업(MessageBox). 확인을 누를 때까지 떠 있으므로,
+        폴링 스레드가 막히지 않도록 항상 별도 스레드에서 띄운다."""
+        def show():
+            try:
+                ctypes.windll.user32.MessageBoxW(
+                    0, msg, title,
+                    MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST,
+                )
+            except Exception:
+                pass
+        threading.Thread(target=show, daemon=True).start()
+
+    def _check_goal(self, goal_sec: int):
+        """오늘 실 업무시간이 목표를 넘으면 하루 한 번 팝업으로 알린다.
+
+        표식(goal_notified)을 먼저 보고 빠져나가므로, 한 번 뜬 뒤에는 폴링마다
+        업무시간을 다시 집계하지 않는다. 목표 시간은 설정에서 온다.
+        """
+        today = date.today()
+        st = self.tracker.storage
+        with self.tracker.lock:
+            if st.goal_notified(today):
+                return
+            worked = self.tracker.summary()[0]
+            if worked < goal_sec:
+                return
+            st.set_goal_notified(today)
+        self._popup(
+            f"오늘 실 업무시간 {S.fmt_hm(goal_sec)}을 채웠습니다.\n\n"
+            f"현재 {S.fmt_hm(worked)}",
+            "업무시간 달성",
+        )
 
     def _toggle_pause(self, icon, item):
         new_value = not self.tracker.manual_pause

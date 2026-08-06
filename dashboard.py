@@ -1039,6 +1039,7 @@ class Dashboard:
         self.var_idle = tk.BooleanVar(value=cur["idle_enabled"])
         self.var_lock = tk.BooleanVar(value=cur["lock_enabled"])
         self.var_ss = tk.BooleanVar(value=cur["screensaver_enabled"])
+        self.var_goal = tk.BooleanVar(value=cur["goal_alarm_enabled"])
         self._editing = False
         self.toggles = []
 
@@ -1074,6 +1075,24 @@ class Dashboard:
             "화면보호기가 작동하면 멈춥니다.",
         )
 
+        # 알림 (카운팅 방식은 아니지만 같은 편집 버튼으로 저장한다)
+        self._label(root, "알림", fg=FG, size=13, bold=True, bg=BG).pack(
+            anchor="w", pady=(8, 6)
+        )
+        goal_card = self._card(root)
+        self._setting_check(
+            goal_card, self.var_goal, "목표 시간 달성 알림",
+            "오늘 실 업무시간이 목표를 넘으면 팝업으로 알립니다 (하루 한 번).",
+        )
+        grow = tk.Frame(goal_card, bg=CARD)
+        grow.pack(fill="x", pady=(8, 0))
+        self._label(grow, "목표 시간", fg=SUB, size=10).pack(side="left", padx=(0, 10))
+        self.goal_stepper = Stepper(
+            grow, value=max(1, round(cur["goal_sec"] / 3600)), lo=1, hi=24,
+        )
+        self.goal_stepper.frame.pack(side="left")
+        self._label(grow, "시간", fg=SUB, size=10).pack(side="left", padx=(8, 0))
+
         # 편집 / 저장 / 취소 버튼 바
         btnbar = tk.Frame(root, bg=BG)
         btnbar.pack(fill="x", pady=(6, 0))
@@ -1083,8 +1102,9 @@ class Dashboard:
         self.lbl_saved = self._label(btnbar, fg=SUB, size=9, bg=BG)
         self.lbl_saved.pack(side="right")
 
-        # 자리비움 토글을 끄면 기준 시간 입력칸도 같이 비활성화 (편집 중에만 의미)
+        # 토글을 끄면 딸린 시간 입력칸도 같이 비활성화 (편집 중에만 의미)
         self.var_idle.trace_add("write", lambda *a: self._sync_idle_state())
+        self.var_goal.trace_add("write", lambda *a: self._sync_goal_state())
         self._set_edit_mode(False)   # 시작은 잠금 상태
 
         # ----- 데이터 내보내기 -----
@@ -1222,6 +1242,7 @@ class Dashboard:
         for sw in self.toggles:
             sw.set_enabled(editing)
         self._sync_idle_state()
+        self._sync_goal_state()
         if editing:
             self.btn_edit.pack_forget()
             self.btn_save.pack(side="left", padx=(0, 6))
@@ -1237,7 +1258,9 @@ class Dashboard:
             "idle": self.var_idle.get(),
             "lock": self.var_lock.get(),
             "ss": self.var_ss.get(),
+            "goal": self.var_goal.get(),
             "min": self.idle_stepper.value(),
+            "goalh": self.goal_stepper.value(),
         }
         self._set_edit_mode(True)
         self.lbl_saved.config(text="편집 중…", fg=ACCENT)
@@ -1247,7 +1270,9 @@ class Dashboard:
         self.var_idle.set(s["idle"])
         self.var_lock.set(s["lock"])
         self.var_ss.set(s["ss"])
+        self.var_goal.set(s["goal"])
         self.idle_stepper.set(s["min"])
+        self.goal_stepper.set(s["goalh"])
         self._set_edit_mode(False)
         self.lbl_saved.config(text="변경 취소됨", fg=SUB)
 
@@ -1259,6 +1284,10 @@ class Dashboard:
         """편집 중이고 자리비움이 켜져 있을 때만 기준 시간 입력칸 활성화."""
         self.idle_stepper.set_enabled(self._editing and bool(self.var_idle.get()))
 
+    def _sync_goal_state(self):
+        """편집 중이고 알림이 켜져 있을 때만 목표 시간 입력칸 활성화."""
+        self.goal_stepper.set_enabled(self._editing and bool(self.var_goal.get()))
+
     def _read_settings(self):
         st = S.Storage()
         try:
@@ -1268,12 +1297,18 @@ class Dashboard:
 
     def _save_settings(self):
         minutes = self.idle_stepper.value()   # 이미 [1, 600] 으로 클램프됨
+        goal_sec = self.goal_stepper.value() * 3600   # [1, 24] 시간
         st = S.Storage()
         try:
             st.set_setting("idle_enabled", bool(self.var_idle.get()))
             st.set_setting("idle_threshold_sec", minutes * 60)
             st.set_setting("lock_enabled", bool(self.var_lock.get()))
             st.set_setting("screensaver_enabled", bool(self.var_ss.get()))
+            st.set_setting("goal_alarm_enabled", bool(self.var_goal.get()))
+            # 목표 시간을 바꿨으면 오늘 이미 알린 표식을 지워 새 목표로 다시 알리게 한다
+            if st.get_settings()["goal_sec"] != goal_sec:
+                st.clear_goal_notified()
+            st.set_setting("goal_sec", goal_sec)
         finally:
             st.close()
         self.lbl_saved.config(text=f"저장됨 · {datetime.now():%H:%M:%S}", fg=GOOD)
