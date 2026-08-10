@@ -18,6 +18,9 @@ from datetime import datetime, timedelta, date, time
 
 APP_NAME = "TimeTracker"
 
+# 트레이 앱과 대시보드가 같은 DB 파일을 동시에 열기 때문에 잠금 대기 시간을 넉넉히 준다.
+DB_TIMEOUT_SEC = 15.0
+
 # 카운팅 방식 설정 (meta 테이블에 'setting:<key>' 로 저장).
 # 트레이 앱과 대시보드(별도 프로세스)가 DB 를 통해 공유하므로,
 # 대시보드에서 바꾼 값이 트레이 앱 폴링 주기 내에 반영된다.
@@ -127,8 +130,19 @@ class Storage:
         self.path = path or db_path()
         # 트레이/메시지펌프/heartbeat 스레드에서 함께 접근하므로 check_same_thread=False.
         # 쓰기 직렬화는 호출부(Tracker)의 Lock 으로 보장한다.
-        self.conn = sqlite3.connect(self.path, check_same_thread=False)
+        # 대시보드는 별도 프로세스에서 같은 파일을 5초마다 열고 쓰므로 프로세스 간
+        # 경합이 생긴다. WAL + 넉넉한 timeout 으로 'database is locked' 예외를 막는다
+        # (트레이 앱에서 이 예외가 나면 heartbeat 스레드가 통째로 죽는다).
+        self.conn = sqlite3.connect(
+            self.path, check_same_thread=False, timeout=DB_TIMEOUT_SEC
+        )
         self.conn.row_factory = sqlite3.Row
+        try:
+            self.conn.execute("PRAGMA journal_mode=WAL")
+            self.conn.execute("PRAGMA synchronous=NORMAL")
+            self.conn.execute(f"PRAGMA busy_timeout={int(DB_TIMEOUT_SEC * 1000)}")
+        except sqlite3.Error:
+            pass  # 구형 파일시스템 등에서 WAL 이 안 되면 기본 모드로 계속 진행
         self._init_schema()
 
     def _init_schema(self):

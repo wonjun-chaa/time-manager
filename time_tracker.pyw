@@ -17,7 +17,8 @@ import os
 import sys
 import threading
 import subprocess
-from datetime import date
+import traceback
+from datetime import date, datetime
 
 import ctypes
 
@@ -44,9 +45,37 @@ MB_ICONINFORMATION = 0x00000040
 MB_SETFOREGROUND = 0x00010000
 MB_TOPMOST = 0x00040000
 
-HEARTBEAT_SEC = 30          # 활동 중 마지막 활동시각 저장 주기
+HEARTBEAT_SEC = 10          # 활동 중 마지막 활동시각 저장 주기
 POLL_SEC = 2               # 화면보호기/자리비움 감지 주기
 IDLE_THRESHOLD_SEC = 180   # 입력 없음 임계 기본값(초). 실제 값은 설정에서 읽음
+
+ERROR_LOG_MAX_BYTES = 256 * 1024   # 오류 로그가 무한정 커지지 않게 넘으면 새로 쓴다
+
+
+def log_path() -> str:
+    return os.path.join(S.data_dir(), "tracker_error.log")
+
+
+def log_error(where: str):
+    """폴링 스레드에서 삼킨 예외를 파일에 남긴다.
+
+    pythonw 로 돌아 콘솔이 없으므로 stderr 는 사라진다. 예외를 삼키고 루프를
+    계속 돌리되, 무슨 일이 있었는지는 %LOCALAPPDATA%\\TimeTracker 에 남긴다.
+    """
+    try:
+        path = log_path()
+        mode = "a"
+        try:
+            if os.path.getsize(path) > ERROR_LOG_MAX_BYTES:
+                mode = "w"
+        except OSError:
+            pass
+        with open(path, mode, encoding="utf-8") as f:
+            f.write(f"[{datetime.now():%Y-%m-%d %H:%M:%S}] {where}\n")
+            f.write(traceback.format_exc())
+            f.write("\n")
+    except Exception:
+        pass   # 로그조차 실패해도 앱은 계속 돈다
 
 
 def screensaver_running() -> bool:
@@ -238,6 +267,10 @@ class App:
         self.hwnd = None
         self.icon = None
         self._stopping = False
+        # 폴링 상태 (_heartbeat_loop / _poll_once 공유)
+        self._prev_ss = False
+        self._prev_idle = False
+        self._last_hb = 0.0
 
     # ---------- 숨김 창 (세션/종료 이벤트 수신) ----------
     def _create_window(self):
@@ -290,43 +323,63 @@ class App:
         return 0
 
     # ---------- heartbeat + 화면보호기 폴링 ----------
-    def _heartbeat_loop(self):
+    def _poll_once(self):
+        """폴링 1회분. 예외는 호출부(_heartbeat_loop)에서 잡는다."""
         import time
-        prev_ss = False
-        prev_idle = False
-        last_hb = 0.0
+        # 설정 갱신(대시보드에서 켜고/끄거나 시간을 바꾼 값 반영).
+        # 방식이 꺼지면 여기서 유효 일시정지가 풀려 카운팅이 재개된다.
+        settings = self.tracker.refresh_settings()
+
+        # 화면보호기 상태 변화 감지 (물리적 상태는 항상 추적)
+        ss = screensaver_running()
+        if ss != self._prev_ss:
+            self.tracker.on_screensaver(ss)
+            self._prev_ss = ss
+
+        # 자리비움(입력 없음) 감지 - 임계값은 설정에서
+        threshold = settings.get("idle_threshold_sec", IDLE_THRESHOLD_SEC)
+        idle_sec = idle_seconds()
+        is_idle = idle_sec >= threshold
+        if is_idle != self._prev_idle:
+            # 경과초를 넘겨 stop 을 마지막 입력 시각으로 소급 기록하게 한다.
+            self.tracker.on_idle(is_idle, idle_sec)
+            self._prev_idle = is_idle
+
+        # 하트비트는 HEARTBEAT_SEC 주기로만 기록
+        now = time.monotonic()
+        if now - self._last_hb >= HEARTBEAT_SEC:
+            self.tracker.heartbeat()
+            self._last_hb = now
+
+        # 목표 시간 달성 알림 - 설정에서 끄면 건너뛴다
+        if settings.get("goal_alarm_enabled"):
+            self._check_goal(settings.get("goal_sec", S.DAILY_GOAL_SEC))
+
+        # 트레이 툴팁 갱신 (호버 시 최신 시간 표시)
+        self._update_tooltip()
+
+    def _heartbeat_loop(self):
+        """폴링 스레드. 예외가 나도 절대 죽지 않는다.
+
+        여기서 예외가 새어나가면 스레드가 조용히 끝나 하트비트/자리비움 감지가
+        영구히 멈추는데, 트레이 아이콘은 멀쩡해서 알아채기 어렵다(대시보드의
+        '최근 활동'만 특정 시각에 멈춰 보인다). 그래서 한 회차를 통째로 감싸고
+        같은 오류가 반복되면 로그만 한 번 남긴 뒤 계속 돈다.
+        """
+        import time
+        self._prev_ss = False
+        self._prev_idle = False
+        self._last_hb = 0.0
+        last_err = None
         while not self._stopping:
-            # 설정 갱신(대시보드에서 켜고/끄거나 시간을 바꾼 값 반영).
-            # 방식이 꺼지면 여기서 유효 일시정지가 풀려 카운팅이 재개된다.
-            settings = self.tracker.refresh_settings()
-
-            # 화면보호기 상태 변화 감지 (물리적 상태는 항상 추적)
-            ss = screensaver_running()
-            if ss != prev_ss:
-                self.tracker.on_screensaver(ss)
-                prev_ss = ss
-
-            # 자리비움(입력 없음) 감지 - 임계값은 설정에서
-            threshold = settings.get("idle_threshold_sec", IDLE_THRESHOLD_SEC)
-            idle_sec = idle_seconds()
-            is_idle = idle_sec >= threshold
-            if is_idle != prev_idle:
-                # 경과초를 넘겨 stop 을 마지막 입력 시각으로 소급 기록하게 한다.
-                self.tracker.on_idle(is_idle, idle_sec)
-                prev_idle = is_idle
-
-            # 하트비트는 HEARTBEAT_SEC 주기로만 기록
-            now = time.monotonic()
-            if now - last_hb >= HEARTBEAT_SEC:
-                self.tracker.heartbeat()
-                last_hb = now
-
-            # 목표 시간 달성 알림 - 설정에서 끄면 건너뛴다
-            if settings.get("goal_alarm_enabled"):
-                self._check_goal(settings.get("goal_sec", S.DAILY_GOAL_SEC))
-
-            # 트레이 툴팁 갱신 (호버 시 최신 시간 표시)
-            self._update_tooltip()
+            try:
+                self._poll_once()
+                last_err = None
+            except Exception as e:
+                sig = f"{type(e).__name__}: {e}"
+                if sig != last_err:      # 같은 오류가 매 회차 반복되면 한 번만 기록
+                    log_error("_heartbeat_loop")
+                    last_err = sig
 
             # POLL_SEC 동안 잘게 쪼개 대기 (종료 응답성)
             for _ in range(int(POLL_SEC * 2)):

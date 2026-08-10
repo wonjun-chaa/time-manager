@@ -75,6 +75,10 @@ ROW_H = 26
 
 NW_LIST_MAX_H = 300     # 비업무 목록 최대 표시 높이(px). 넘으면 스크롤(행 약 9개 분량)
 
+# 카운팅 중인데 하트비트(last_active)가 이보다 오래됐으면 트레이 앱이 멈춘 것으로 본다.
+# 트레이 앱은 HEARTBEAT_SEC(10초)마다 기록하므로 넉넉한 여유를 둔 값.
+STALE_SEC = 120
+
 
 class _LOGFONTW(ctypes.Structure):
     _fields_ = [
@@ -436,12 +440,21 @@ class Dashboard:
         self.today_cells = {}
         for i, key in enumerate(["출근", "최근 활동", "체류시간", "비업무"]):
             cell = tk.Frame(row, bg=CARD)
-            cell.grid(row=0, column=i, sticky="w", padx=(0, 18))
+            # nw = 위쪽 정렬. 최근 활동 칸만 상태 줄이 붙어 한 줄 더 높은데,
+            # 세로 가운데 정렬('w')이면 나머지 칸이 그만큼 아래로 밀려 어긋난다.
+            cell.grid(row=0, column=i, sticky="nw", padx=(0, 18))
             self._label(cell, key, fg=SUB, size=9).pack(anchor="w")
             col = SUB if key == "비업무" else FG
             val = self._label(cell, fg=col, size=12, bold=True)
             val.pack(anchor="w")
             self.today_cells[key] = val
+            if key == "최근 활동":
+                # 일시정지 중이면 최근 활동은 원래 멈춰 있는 값이라 '안 갱신되는'
+                # 것처럼 보인다. 그 이유(또는 트레이 앱이 멈춘 상태)를 바로 아래에
+                # 적어 준다. 내용이 비어도 한 줄 높이는 유지해 레이아웃이 안 흔들린다.
+                self.lbl_last_note = self._label(cell, fg=SUB, size=8)
+                self.lbl_last_note.config(height=1)
+                self.lbl_last_note.pack(anchor="w")
 
         # 비업무시간 수기 보정 (오늘)
         self._build_adjust(card)
@@ -1328,26 +1341,51 @@ class Dashboard:
             adjusts.setdefault(today, st.total_adjust_seconds(today))
             leaves.setdefault(today, st.get_leave(today))
             pause_until = st.ongoing_pause_now(today)
-            return ivs, last, adjusts, leaves, pause_until
+            last_active = st.last_active()
+            return ivs, last, adjusts, leaves, pause_until, last_active
         finally:
             st.close()
 
-    def _status(self, last):
+    def _activity_state(self, last, last_active):
+        """현재 기록 상태를 판정해 (상태, 사유 라벨) 로 반환.
+
+        상태: none(기록 없음) | active(카운팅 중) | paused(일시정지)
+              | ended(퇴근/종료) | stale(카운팅 중인데 하트비트가 끊김)
+
+        stale 은 트레이 앱이 죽었거나 폴링이 멈춘 경우다. 이때 '최근 활동'은
+        더 이상 갱신되지 않는데 화면의 나머지는 계속 도니까, 따로 알려 준다.
+        """
         if last is None:
-            return "기록 없음", SUB
-        if last["kind"] == "start":
-            return "● 업무 중", GOOD
-        return "■ 일시정지 / 종료", SUB
+            return "none", ""
+        if last["kind"] == "stop":
+            label = S.NONWORK_REASON_LABELS.get(last["reason"])
+            return ("paused", label) if label else ("ended", "")
+        if (last_active is None
+                or (datetime.now() - last_active).total_seconds() > STALE_SEC):
+            return "stale", ""
+        return "active", ""
+
+    def _status(self, state, label):
+        # '수동 일시정지'처럼 라벨에 이미 일시정지가 들어있으면 덧붙이지 않는다
+        paused = f"■ {label}" if label.endswith("일시정지") else f"■ {label} (일시정지)"
+        return {
+            "none": ("기록 없음", SUB),
+            "active": ("● 업무 중", GOOD),
+            "paused": (paused, TODAY),
+            "ended": ("■ 퇴근 / 종료", SUB),
+            "stale": ("■ 기록 멈춤 · 트레이 앱 확인", WARN),
+        }[state]
 
     # ----- 값만 갱신 (깜빡임 없음) -----
     def _refresh(self):
-        ivs, last, adjusts, leaves, pause_until = self._load()
+        ivs, last, adjusts, leaves, pause_until, last_active = self._load()
         today = date.today()
 
         self.lbl_date.config(
             text=f"{today:%Y년 %m월 %d일} ({WEEKDAY[today.weekday()]})"
         )
-        stxt, scol = self._status(last)
+        state, state_label = self._activity_state(last, last_active)
+        stxt, scol = self._status(state, state_label)
         self.lbl_status.config(text=stxt, fg=scol)
 
         today_adj = adjusts.get(today, 0)
@@ -1359,7 +1397,17 @@ class Dashboard:
         today_stay = S.stay_seconds(ivs, today, pause_until)
         self.lbl_today.config(text=S.fmt_hm(today_work))
         self.today_cells["출근"].config(text=f"{first:%H:%M}" if first else "--:--")
-        self.today_cells["최근 활동"].config(text=f"{lastt:%H:%M}" if lastt else "--:--")
+        # 최근 활동: 값 자체는 마지막 활동 시각(일시정지 중엔 멈춰 있는 게 정상).
+        # 왜 안 움직이는지를 아래 줄과 색으로 같이 보여 준다.
+        note, ncol = {
+            "paused": (f"{state_label} 중", TODAY),
+            "stale": ("기록 멈춤", WARN),
+        }.get(state, ("", SUB))
+        self.today_cells["최근 활동"].config(
+            text=f"{lastt:%H:%M}" if lastt else "--:--",
+            fg=(WARN if state == "stale" else FG),
+        )
+        self.lbl_last_note.config(text=note, fg=ncol)
         self.today_cells["체류시간"].config(
             text=S.fmt_hm(today_stay) if first else "-"
         )
