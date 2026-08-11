@@ -389,12 +389,14 @@ class App:
 
     # ---------- 트레이 아이콘 ----------
     def _make_image(self):
-        img = Image.new("RGB", (64, 64), (28, 32, 48))
+        # 대시보드와 같은 톤(틸 원 + 흰 바늘). 트레이는 밝은/어두운 배경 모두
+        # 가능하므로 채운 원으로 그려 어디서든 보이게 한다.
+        img = Image.new("RGB", (64, 64), (237, 240, 237))
         d = ImageDraw.Draw(img)
-        d.ellipse((6, 6, 58, 58), outline=(120, 200, 255), width=4)
+        d.ellipse((4, 4, 60, 60), fill=(23, 118, 107))
         # 시계 바늘
-        d.line((32, 32, 32, 14), fill=(120, 200, 255), width=4)
-        d.line((32, 32, 46, 38), fill=(120, 200, 255), width=4)
+        d.line((32, 32, 32, 15), fill=(255, 255, 255), width=4)
+        d.line((32, 32, 45, 39), fill=(255, 255, 255), width=4)
         return img
 
     def _report_dir(self):
@@ -418,9 +420,32 @@ class App:
         except Exception:
             pass
 
+    def _goal_popup(self, worked: int, goal_sec: int):
+        """목표 달성 알림을 대시보드와 같은 디자인의 토스트로 띄운다.
+
+        notify.py 를 **별도 프로세스**로 실행한다: 이 앱의 메인 스레드는
+        PumpMessages, 다른 스레드는 pystray/폴링이라 여기서 Tk 를 띄울 자리가
+        없고, 프로세스를 나누면 팝업이 죽어도 트레이 앱은 멀쩡하다.
+        실패하면 예전처럼 기본 MessageBox 로 떨어진다.
+        """
+        notify_py = os.path.join(self._report_dir(), "notify.py")
+        try:
+            subprocess.Popen(
+                [sys.executable, notify_py, str(int(worked)), str(int(goal_sec))],
+                close_fds=True,
+            )
+        except Exception:
+            log_error("goal_popup")
+            self._popup(
+                f"오늘 실 업무시간 {S.fmt_hm(goal_sec)}을 채웠습니다.\n\n"
+                f"현재 {S.fmt_hm(worked)}",
+                "업무시간 달성",
+            )
+
     def _popup(self, msg, title="TimeTracker"):
         """모달 팝업(MessageBox). 확인을 누를 때까지 떠 있으므로,
-        폴링 스레드가 막히지 않도록 항상 별도 스레드에서 띄운다."""
+        폴링 스레드가 막히지 않도록 항상 별도 스레드에서 띄운다.
+        (지금은 notify.py 실행이 실패했을 때의 대비책으로만 쓴다.)"""
         def show():
             try:
                 ctypes.windll.user32.MessageBoxW(
@@ -446,11 +471,7 @@ class App:
             if worked < goal_sec:
                 return
             st.set_goal_notified(today)
-        self._popup(
-            f"오늘 실 업무시간 {S.fmt_hm(goal_sec)}을 채웠습니다.\n\n"
-            f"현재 {S.fmt_hm(worked)}",
-            "업무시간 달성",
-        )
+        self._goal_popup(worked, goal_sec)
 
     def _toggle_pause(self, icon, item):
         new_value = not self.tracker.manual_pause

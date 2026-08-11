@@ -24,40 +24,58 @@ import storage as S
 import export as EXP
 
 # ----- 색상/폰트 테마 -----
-BG = "#1b1f2e"
-CARD = "#262b3d"
-CARD2 = "#2f3650"
-HOVER = "#3a4365"   # 접기/펴기 바 마우스 오버 색
-FG = "#e8ecf5"
-SUB = "#9aa3bd"
-ACCENT = "#78c8ff"
-TODAY = "#ffce6b"
-GOOD = "#7ee0a8"
-GRID = "#4a5370"        # 차트 8시간 기준선 (SUB 보다 흐린 점선)
+# 톤앤매너는 같은 폴더의 "주간 업무 보드"(todo_list) 앱에서 가져왔다:
+# '유칼립투스 어스톤' = 그린그레이 중성색 배경 + 흰 카드 + 틸 액센트,
+# 경고는 클레이 레드/오커. 저 앱의 라이트 테마 토큰과 값이 1:1로 대응한다.
+BG = "#EDF0ED"          # --bg      창 배경 (연회색-그린)
+CARD = "#FFFFFF"        # --surface 카드
+CARD2 = "#F5F7F5"       # --surface-2 입력란/보조 면
+LINE = "#D9E0DA"        # --line    1px 테두리
+HOVER = "#E7ECE8"       # 버튼/바 마우스 오버 (surface-2 보다 살짝 진하게)
+FG = "#253430"          # --ink
+SUB = "#68776F"         # --muted
+ACCENT = "#17766B"      # --accent  틸
+ACCENT_SOFT = "#E1EFEA"  # --accent-soft (칩 배경)
+ACCENT_INK = "#0F5A4E"  # --accent-ink  (칩 글자)
+ON_ACCENT = "#FFFFFF"   # --on-accent
+TODAY = "#C0913B"       # --warn    오커 (오늘/일시정지 강조)
+GOOD = "#2E6B5C"        # 저장됨 등 성공 표시 (태그 팔레트의 진한 그린)
+WARN = "#BF5B4B"        # --danger  삭제 등 되돌릴 수 없는 동작
+GRID = "#B4C1B7"        # 차트 8시간 기준선 (LINE 보다 진한 점선)
 
-# 토글 스위치 색 (너무 밝지 않게 차분하게)
-TOGGLE_ON = "#3f8f66"    # 켜짐 트랙 - 가라앉은 초록
-TOGGLE_OFF = "#39404f"   # 꺼짐 트랙 - 어두운 회색
-TOGGLE_KNOB = "#dfe3ec"  # knob - 부드러운 회백색
+# 태그 파스텔 8색 (todo 앱의 --t{0-7}b/t). (배경, 글자) 쌍.
+TAG_COLORS = [
+    ("#DFEBDC", "#4A6B44"), ("#D8EBE4", "#2E6B5C"),
+    ("#DCE7EE", "#40667F"), ("#E1E2F0", "#585A8C"),
+    ("#EADFE9", "#7A5276"), ("#F0DFDD", "#8C5450"),
+    ("#EFE6D6", "#85683B"), ("#E3E8E3", "#5A695F"),
+]
+
+# 토글 스위치 색
+TOGGLE_ON = ACCENT       # 켜짐 트랙
+TOGGLE_OFF = "#C9D2CB"   # 꺼짐 트랙
+TOGGLE_KNOB = "#FFFFFF"  # knob
 # 비활성(편집 잠금) 상태 색 - 흐리게
-TOGGLE_ON_DIS = "#34493f"
-TOGGLE_OFF_DIS = "#2c313c"
-TOGGLE_KNOB_DIS = "#737a8c"
+TOGGLE_ON_DIS = "#A6C6BF"
+TOGGLE_OFF_DIS = "#E2E7E3"
+TOGGLE_KNOB_DIS = "#F4F6F4"
 
-# 근무/출장/휴가/반차 색 - 채도를 낮춘 차분한 톤 (막대·요일 버튼 공용).
-# UI 강조색(ACCENT/TODAY)은 그대로 두고, 상태 표시에만 이 팔레트를 쓴다.
-BAR_WORK = "#6e9aba"     # 근무 (지난 날) - 가라앉은 파랑
-BAR_TODAY = "#c2a770"    # 근무 (오늘) - 가라앉은 호박색
-TRIP = "#59a68f"         # 출장 - 탁한 청록
-VAC = "#8b81bb"          # 휴가 - 탁한 보라
-HALF = "#bb8194"         # 반차 - 탁한 자주
-WARN = "#d98b8b"         # 삭제 등 되돌릴 수 없는 동작
-
+# 근무/출장/휴가/반차 색 (막대·요일 버튼 공용).
+# 넷이 한눈에 구분되도록 색상(hue)을 일부러 벌려 놓았다: 근무=틸, 출장=파랑,
+# 휴가=앰버, 반차=마젠타. 파스텔 톤은 유지하되 채도를 조금 올려 구분을 살린다.
+# (예전엔 청회색/인디고/자주라 셋 다 비슷해 보였다.)
+BAR_WORK = "#7FA79B"     # 근무 (지난 날) - 가라앉은 틸
+BAR_TODAY = ACCENT       # 근무 (오늘) - 액센트 틸
+TRIP = "#3D6E96"         # 출장 - 파랑
+VAC = "#B07C22"          # 휴가 - 앰버
+HALF = "#9B4F80"         # 반차 - 마젠타
 LEAVE_COLORS = {"trip": TRIP, "vacation": VAC, "halfday": HALF}
+# 요일 버튼용 연한 배경 (같은 색상의 파스텔)
+LEAVE_SOFT = {"trip": "#D5E5F3", "vacation": "#F7E7C4", "halfday": "#F5DCEC"}
 
-# 비업무 목록의 방식별 색 (위 팔레트와 같은 톤으로 맞춘다)
-NW_PAUSE = "#6fae8b"     # 수동 일시정지
-NW_MANUAL = "#7fa8ad"    # 수기 추가
+# 비업무 목록의 방식별 색 (태그 팔레트와 같은 톤)
+NW_PAUSE = "#4A6B44"     # 수동 일시정지 - 그린
+NW_MANUAL = "#5A695F"    # 수기 추가 - 그레이그린
 
 WEEKDAYS_SHOWN = 5       # 주간 표시 일수 (월~금, 토·일 제외)
 
@@ -69,6 +87,8 @@ WORKDAY_SCALE_SEC = 8 * 3600  # 막대 길이 기준 (8시간)
 
 BAR_X0 = 60       # 막대 시작 x (요일 라벨 영역 다음)
 BAR_MAX = 300     # 막대 최대 길이
+BAR_H = 14        # 막대/트랙 높이
+BAR_R = 5         # 막대 모서리 라운드
 VAL_W = 96        # 막대 오른쪽 시간 숫자 영역
 CHART_W = BAR_X0 + BAR_MAX + VAL_W
 ROW_H = 26
@@ -78,6 +98,13 @@ NW_LIST_MAX_H = 300     # 비업무 목록 최대 표시 높이(px). 넘으면 �
 # 카운팅 중인데 하트비트(last_active)가 이보다 오래됐으면 트레이 앱이 멈춘 것으로 본다.
 # 트레이 앱은 HEARTBEAT_SEC(10초)마다 기록하므로 넉넉한 여유를 둔 값.
 STALE_SEC = 120
+
+# 창을 화면(작업 영역) 안에 붙잡아 두기 위한 어림값(px).
+# 창 바깥 높이 = 내용 높이 + 타이틀바 + 테두리 이므로, 내용 높이 상한은
+# 화면 높이 − (타이틀바+테두리+작업표시줄) = screenheight − MAX_H_MARGIN.
+TITLEBAR_H = 39          # 타이틀바 + 테두리
+TASKBAR_H = 48
+MAX_H_MARGIN = TITLEBAR_H + TASKBAR_H + 1
 
 
 class _LOGFONTW(ctypes.Structure):
@@ -134,6 +161,111 @@ def set_ime_composition_font(family: str, px: int):
         pass
 
 
+_ROUND_CACHE = {}
+_FONT_CACHE = {}
+ROUND_CACHE_MAX = 600
+
+
+def _font(spec):
+    """폰트 튜플 → 측정용 tkfont.Font (캐시)."""
+    f = _FONT_CACHE.get(spec)
+    if f is None:
+        f = tkfont.Font(font=spec)
+        _FONT_CACHE[spec] = f
+    return f
+
+
+def round_img(w, h, radius, fill, outline=None, bg=BG, bw=1):
+    """모서리가 둥근 사각형 이미지 (버튼/칩 배경용, 캐시).
+
+    tk 위젯에는 radius 가 없어서, todo 앱의 8~99px 둥근 버튼/알약 칩을 흉내내려면
+    배경을 이미지로 깔고 그 위에 글자를 얹어야 한다(Label 의 compound='center').
+    Canvas 는 안티앨리어싱이 없으므로 4배로 그린 뒤 LANCZOS 로 줄인다.
+    """
+    key = (w, h, radius, fill, outline, bg, bw)
+    img = _ROUND_CACHE.get(key)
+    if img is None:
+        # 주간 차트 막대는 길이가 바뀔 때마다 새 이미지가 되므로 캐시가 계속 는다.
+        # 한도를 넘으면 통째로 비운다 — 화면에 떠 있는 이미지는 위젯 쪽에서
+        # 따로 참조를 붙들고 있어(Pill._img, Dashboard._bar_imgs) 안전하다.
+        if len(_ROUND_CACHE) > ROUND_CACHE_MAX:
+            _ROUND_CACHE.clear()
+        ss = 4
+        im = Image.new("RGB", (w * ss, h * ss), bg)
+        dr = ImageDraw.Draw(im)
+        r = min(radius, min(w, h) / 2) * ss
+        dr.rounded_rectangle(
+            [0, 0, w * ss - 1, h * ss - 1], radius=r, fill=fill,
+            outline=outline, width=(bw * ss if outline else 0),
+        )
+        img = ImageTk.PhotoImage(im.resize((w, h), Image.LANCZOS))
+        _ROUND_CACHE[key] = img
+    return img
+
+
+class Pill(tk.Label):
+    """둥근 버튼 / 알약 칩 (todo 앱의 `.btn`·`.tag` 대응).
+
+    tk.Label 을 상속하므로 pack/grid/bind/state 는 기존 버튼과 똑같이 쓴다.
+    배경(둥근 사각형)은 이미지, 글자는 tk 가 그 위에 그린다.
+    """
+
+    def __init__(self, parent, text="", *, font=(FONT, 9, "bold"), fg=FG,
+                 fill=CARD, outline=LINE, radius=8, padx=12, pady=5,
+                 bg=BG, cmd=None, hover_fill=HOVER, min_w=0):
+        super().__init__(
+            parent, bg=bg, bd=0, highlightthickness=0, compound="center",
+            font=font, fg=fg, disabledforeground=SUB,
+            cursor=("hand2" if cmd else "arrow"),
+        )
+        self._font_spec = font
+        self._fg, self._fill, self._outline = fg, fill, outline
+        self._radius, self._padx, self._pady = radius, padx, pady
+        self._bg, self._hover_fill, self._min_w = bg, hover_fill, min_w
+        self._text = text
+        self._cmd = cmd
+        if cmd:
+            self.bind("<Button-1>", self._on_click)
+        self.bind("<Enter>", lambda e: self._paint(True))
+        self.bind("<Leave>", lambda e: self._paint(False))
+        self._paint(False)
+
+    # ----- 내부 -----
+    def _disabled(self):
+        return str(self["state"]) == "disabled"
+
+    def _on_click(self, _e):
+        if self._cmd and not self._disabled():
+            self._cmd()
+
+    def _paint(self, hover: bool):
+        f = _font(self._font_spec)
+        lines = str(self._text).split("\n")
+        w = max(self._min_w, max(f.measure(t) for t in lines) + 2 * self._padx)
+        h = f.metrics("linespace") * len(lines) + 2 * self._pady
+        fill = self._hover_fill if (hover and self._hover_fill and
+                                    self._cmd and not self._disabled()) else self._fill
+        self._img = round_img(w, h, self._radius, fill, self._outline, self._bg)
+        self.config(image=self._img, text=self._text, fg=self._fg)
+
+    # ----- 외부 -----
+    def set_text(self, text):
+        self._text = text
+        self._paint(False)
+
+    def set_style(self, *, fg=None, fill=None, outline=False, text=None):
+        """색만 바꿔 다시 그린다 (탭 선택, 태그 선택 등). outline=False 는 '유지'."""
+        if fg is not None:
+            self._fg = fg
+        if fill is not None:
+            self._fill = fill
+        if outline is not False:
+            self._outline = outline
+        if text is not None:
+            self._text = text
+        self._paint(False)
+
+
 class Stepper:
     """`−  [숫자]  +` 형태의 숫자 입력 위젯 (tk.Spinbox 대체).
 
@@ -156,10 +288,10 @@ class Stepper:
         self.entry = tk.Entry(
             self.frame, textvariable=self.var, width=width, justify="center",
             font=(FONT, 11, "bold"),
-            bg=CARD2, fg=FG, disabledbackground=CARD, disabledforeground=SUB,
+            bg=CARD2, fg=FG, disabledbackground=CARD2, disabledforeground=SUB,
             relief="flat", bd=0, insertbackground=FG,
             insertofftime=0,   # 커서 깜박임 제거 (고정 커서)
-            highlightthickness=1, highlightbackground=CARD2, highlightcolor=ACCENT,
+            highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT,
         )
         self.entry.pack(side="left", padx=3, ipady=2)
         self.plus = self._btn("+", lambda: self._step(1))
@@ -175,7 +307,7 @@ class Stepper:
         return tk.Button(
             self.frame, text=text, command=cmd, font=(FONT, 10, "bold"),
             width=1, bg=CARD2, fg=SUB,
-            activebackground=ACCENT, activeforeground=BG,
+            activebackground=HOVER, activeforeground=ACCENT,
             relief="flat", bd=0, padx=2, pady=0, cursor="hand2", takefocus=0,
         )
 
@@ -315,8 +447,9 @@ class Dashboard:
         # 내용에 맞춰 창 크기를 자동 산정 (글자 잘림 방지)
         self.root.update_idletasks()
         w = max(540, self.root.winfo_reqwidth())
-        # 화면 밖으로 나가지 않게 높이 상한
-        h = min(self.root.winfo_reqheight(), self.root.winfo_screenheight() - 80)
+        # 화면(작업 영역) 밖으로 나가지 않게 높이 상한
+        h = min(self.root.winfo_reqheight(),
+                self.root.winfo_screenheight() - MAX_H_MARGIN)
         self.root.geometry(f"{w}x{h}")
         self.root.minsize(w, h)
 
@@ -333,27 +466,31 @@ class Dashboard:
 
         self.root.after(REFRESH_MS, self._tick)
 
-    # ----- 창 아이콘 / 다크 타이틀바 (Windows) -----
+    # ----- 창 아이콘 / 타이틀바 (Windows) -----
     def _set_window_icon(self):
-        """트레이 아이콘(어두운 원 + 시계 바늘)과 같은 디자인을 창 아이콘으로."""
+        """창 아이콘: 라이트 테마에 맞춘 틸 원 + 흰 시계 바늘."""
         try:
-            img = Image.new("RGB", (64, 64), (28, 32, 48))
+            img = Image.new("RGB", (64, 64), (237, 240, 237))   # BG
             d = ImageDraw.Draw(img)
-            d.ellipse((6, 6, 58, 58), outline=(120, 200, 255), width=4)
-            d.line((32, 32, 32, 14), fill=(120, 200, 255), width=4)   # 시계 바늘
-            d.line((32, 32, 46, 38), fill=(120, 200, 255), width=4)
+            d.ellipse((4, 4, 60, 60), fill=(23, 118, 107))      # ACCENT
+            d.line((32, 32, 32, 15), fill=(255, 255, 255), width=4)   # 시계 바늘
+            d.line((32, 32, 45, 39), fill=(255, 255, 255), width=4)
             self._icon_img = ImageTk.PhotoImage(img)   # GC 방지용 참조 보관
             self.root.iconphoto(True, self._icon_img)
         except Exception:
             pass
 
     def _apply_dark_titlebar(self):
-        """DWM 로 타이틀바를 다크 모드로 (Win11 22621: 속성 20 = 다크모드)."""
+        """타이틀바를 라이트로 고정 (Win11 22621: 속성 20 = 다크모드 on/off).
+
+        본문이 밝은 테마이므로, OS 가 다크 모드여도 타이틀바만 어둡게 뜨지
+        않도록 0(=off)을 명시한다.
+        """
         try:
             self.root.update_idletasks()
             # tk 위젯 HWND 의 부모가 실제 최상위 창
             hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
-            val = ctypes.c_int(1)
+            val = ctypes.c_int(0)
             ctypes.windll.dwmapi.DwmSetWindowAttribute(
                 hwnd, 20, ctypes.byref(val), ctypes.sizeof(val)
             )
@@ -369,7 +506,11 @@ class Dashboard:
         return tk.Label(parent, text=text, fg=fg, bg=bg, font=f, anchor="w")
 
     def _card(self, parent, pad=10):
-        c = tk.Frame(parent, bg=CARD)
+        """흰 면 + 1px 테두리 카드 (todo 앱의 `.col`/`.card` 대응)."""
+        c = tk.Frame(
+            parent, bg=CARD, highlightthickness=1,
+            highlightbackground=LINE, highlightcolor=LINE,
+        )
         c.pack(fill="x", pady=(0, 8))
         inner = tk.Frame(c, bg=CARD)
         inner.pack(fill="x", padx=pad, pady=pad)
@@ -378,15 +519,15 @@ class Dashboard:
     # ----- 탭바 (현황 / 설정) -----
     def _build_tabs(self):
         bar = tk.Frame(self.root, bg=BG)
-        bar.pack(fill="x", padx=18, pady=(14, 0))
+        bar.pack(fill="x", padx=18, pady=(14, 2))
         self._tab_btns = {}
         for key, label in [("dash", "현황"), ("nonwork", "비업무"), ("settings", "설정")]:
-            b = tk.Label(
-                bar, text=label, font=(FONT, 11, "bold"),
-                bg=BG, fg=SUB, padx=14, pady=6, cursor="hand2",
+            b = Pill(
+                bar, label, font=(FONT, 11, "bold"), fg=SUB,
+                fill=BG, outline=None, radius=8, padx=14, pady=6,
+                cmd=lambda k=key: self._show_tab(k), hover_fill=HOVER,
             )
             b.pack(side="left", padx=(0, 6))
-            b.bind("<Button-1>", lambda e, k=key: self._show_tab(k))
             self._tab_btns[key] = b
 
         # 탭 내용 컨테이너 + 두 프레임 (한 번만 생성, pack/forget 로 전환)
@@ -408,7 +549,10 @@ class Dashboard:
         frame.pack(fill="both", expand=True)
         for k, b in self._tab_btns.items():
             active = (k == key)
-            b.config(fg=(ACCENT if active else SUB), bg=(CARD if active else BG))
+            b.set_style(
+                fg=(ACCENT_INK if active else SUB),
+                fill=(ACCENT_SOFT if active else BG),
+            )
         self._active_tab = key
         if key == "nonwork":
             self._refresh_nonwork()   # 탭이 보이는 순간 최신화
@@ -426,7 +570,11 @@ class Dashboard:
         head.pack(fill="x", pady=(0, 8))
         self.lbl_date = self._label(head, fg=FG, size=13, bold=True, bg=BG)
         self.lbl_date.pack(side="left")
-        self.lbl_status = self._label(head, fg=GOOD, size=10, bold=True, bg=BG)
+        # 상태는 todo 앱의 `.chip-now` 처럼 둥근 칩으로
+        self.lbl_status = Pill(
+            head, "", font=(FONT, 9, "bold"), fg=ACCENT_INK, fill=ACCENT_SOFT,
+            outline=None, radius=99, padx=11, pady=3, bg=BG,
+        )
         self.lbl_status.pack(side="right")
 
         # 오늘 카드
@@ -467,18 +615,20 @@ class Dashboard:
         )
         self.chart.pack(fill="x")
         # 평일(월~금)치 캔버스 아이템을 미리 생성하고 id 보관 → 갱신 시 좌표/텍스트만 수정
+        # 막대는 Canvas 사각형 대신 둥근 이미지로 (Canvas 에는 radius 도
+        # 안티앨리어싱도 없다). 트랙 이미지는 하나를 다섯 줄이 함께 쓴다.
+        self._track_img = round_img(BAR_MAX, BAR_H, BAR_R, CARD2, LINE, bg=CARD)
+        self._bar_imgs = [None] * WEEKDAYS_SHOWN   # 막대 이미지 참조 유지용
         self.bars = []
         for i in range(WEEKDAYS_SHOWN):
             y = i * ROW_H + 14
             day_id = self.chart.create_text(
                 4, y, text="", fill=SUB, font=(FONT, 9), anchor="w"
             )
-            self.chart.create_rectangle(
-                BAR_X0, y - 8, BAR_X0 + BAR_MAX, y + 8, fill=CARD2, outline=""
+            self.chart.create_image(
+                BAR_X0, y, image=self._track_img, anchor="w"
             )
-            bar_id = self.chart.create_rectangle(
-                BAR_X0, y - 8, BAR_X0, y + 8, fill=ACCENT, outline=""
-            )
+            bar_id = self.chart.create_image(BAR_X0, y, anchor="w")
             val_id = self.chart.create_text(
                 BAR_X0 + BAR_MAX + 6, y, text="", fill=FG, font=(FONT, 9), anchor="w"
             )
@@ -516,7 +666,7 @@ class Dashboard:
 
         build_body(body) 로 본문을 채우고, 바 오른쪽 값 라벨(extra)을 돌려준다.
         """
-        sep = tk.Frame(card, bg=CARD2, height=1)
+        sep = tk.Frame(card, bg=LINE, height=1)
         sep.pack(fill="x", pady=(8, 8))
 
         bar = tk.Frame(card, bg=CARD2, cursor="hand2")
@@ -613,7 +763,8 @@ class Dashboard:
         self.tag_var = tk.StringVar()
         self.tag_entry = tk.Entry(
             self.tag_new, textvariable=self.tag_var, bg=CARD2, fg=FG,
-            insertbackground=FG, relief="flat", font=self.nw_font, width=14,
+            insertbackground=FG, relief="flat", bd=0, font=self.nw_font, width=14,
+            highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT,
         )
         self.tag_entry.pack(side="left", ipady=3)
         self.tag_entry.bind("<Return>", lambda e: self._add_tag())
@@ -644,28 +795,32 @@ class Dashboard:
             w.destroy()
         for t in tags:
             self._tag_chip(t)
-        plus = tk.Label(
-            self.tag_box, text="＋", font=(FONT, 10, "bold"),
-            bg=CARD2, fg=ACCENT, padx=7, pady=2, cursor="hand2",
+        plus = Pill(
+            self.tag_box, "＋", font=(FONT, 10, "bold"), fg=ACCENT,
+            fill=CARD, outline=LINE, radius=99, padx=8, pady=1, bg=CARD,
+            cmd=self._toggle_tag_entry, hover_fill=ACCENT_SOFT,
         )
         plus.pack(side="left", padx=(0, 4))
-        plus.bind("<Button-1>", lambda e: self._toggle_tag_entry())
         if getattr(self, "_active_tab", None) == "nonwork":
             self._refit_height()   # 태그가 늘어 줄 폭/높이가 바뀌면 창도 맞춘다
 
+    @staticmethod
+    def _tag_color(tag):
+        """태그 이름으로 파스텔 색 한 쌍을 정한다 (목록이 바뀌어도 색은 그대로)."""
+        return TAG_COLORS[sum(map(ord, tag)) % len(TAG_COLORS)]
+
     def _tag_chip(self, tag):
+        """todo 앱의 `.tag` 처럼 파스텔 알약. 선택된 칩은 액센트 테두리."""
         sel = (tag == self._nw_tag)
-        lb = tk.Label(
-            self.tag_box, text=tag, font=(FONT, 9, "bold"),
-            bg=(NW_MANUAL if sel else CARD2), fg=(BG if sel else SUB),
-            padx=8, pady=2, cursor="hand2",
+        fill, fg = self._tag_color(tag)
+        lb = Pill(
+            self.tag_box, tag, font=(FONT, 9, "bold"), fg=fg,
+            fill=fill, outline=(ACCENT if sel else fill), radius=99,
+            padx=10, pady=2, bg=CARD,
+            cmd=lambda t=tag: self._select_tag(t), hover_fill=None,
         )
         lb.pack(side="left", padx=(0, 4))
-        lb.bind("<Button-1>", lambda e, t=tag: self._select_tag(t))
         lb.bind("<Button-3>", lambda e, t=tag: self._delete_tag(t))
-        if not sel:
-            lb.bind("<Enter>", lambda e: lb.config(bg=HOVER, fg=FG))
-            lb.bind("<Leave>", lambda e: lb.config(bg=CARD2, fg=SUB))
 
     def _select_tag(self, tag):
         """같은 태그를 다시 누르면 선택 해제 (사유 없이 추가)."""
@@ -728,11 +883,10 @@ class Dashboard:
         row.pack(fill="x")
         self.leave_btns = []
         for i in range(WEEKDAYS_SHOWN):
-            b = tk.Button(
-                row, text="", font=(FONT, 9, "bold"), width=10,
-                bg=CARD2, fg=SUB, activebackground=HOVER, activeforeground=FG,
-                relief="flat", bd=0, padx=2, pady=6, cursor="hand2",
-                command=lambda i=i: self._cycle_leave(i),
+            b = Pill(
+                row, "", font=(FONT, 9, "bold"), fg=SUB,
+                fill=CARD2, outline=LINE, radius=8, padx=10, pady=5, bg=CARD,
+                cmd=lambda i=i: self._cycle_leave(i), min_w=86,
             )
             b.pack(side="left", padx=(0, 6))
             self.leave_btns.append(b)
@@ -756,15 +910,22 @@ class Dashboard:
         rw = max(540, self.root.winfo_reqwidth())
         w = max(self.root.winfo_width(), rw)
         # 비업무 구간이 많아도 창이 화면 밖으로 나가지 않게 상한을 둔다
-        h = min(self.root.winfo_reqheight(), self.root.winfo_screenheight() - 80)
+        sh = self.root.winfo_screenheight()
+        h = min(self.root.winfo_reqheight(), sh - MAX_H_MARGIN)
         self.root.geometry(f"{w}x{h}")
         self.root.minsize(rw, h)
+        # 창은 아래로 자라므로, 짧은 탭에서 긴 탭(설정)으로 옮기면 아랫부분이
+        # 화면 밖으로 밀려난다. 그럴 때만 창을 위로 끌어올린다.
+        y_max = max(0, sh - TASKBAR_H - TITLEBAR_H - h)
+        if self.root.winfo_y() > y_max:
+            self.root.geometry(f"+{self.root.winfo_x()}+{y_max}")
 
-    def _adj_btn(self, parent, text, cmd, fg):
-        b = tk.Button(
-            parent, text=text, command=cmd, font=(FONT, 9, "bold"),
-            bg=CARD2, fg=fg, activebackground=BG, activeforeground=fg,
-            relief="flat", bd=0, padx=10, pady=3, cursor="hand2",
+    def _adj_btn(self, parent, text, cmd, fg, bg=None):
+        """기본 버튼 (todo 앱 `.btn`: 흰 면 + 1px 테두리 + 8px 라운드)."""
+        b = Pill(
+            parent, text, font=(FONT, 9, "bold"), fg=fg,
+            fill=CARD, outline=LINE, radius=8, padx=11, pady=4,
+            bg=(bg or parent["bg"]), cmd=cmd,
         )
         b.pack(side="left", padx=(0, 6))
         return b
@@ -775,14 +936,12 @@ class Dashboard:
         버튼 크기는 다른 글자 버튼(`_adj_btn`)과 같게 두고, 기호만 조금 키워
         (pady 를 줄여 높이를 맞춘다) 눈에 띄게 한다.
         """
-        b = tk.Button(
-            parent, text=text, command=cmd, font=(FONT, 11, "bold"),
-            bg=CARD2, fg=fg, activebackground=HOVER, activeforeground=fg,
-            relief="flat", bd=0, padx=10, pady=2, cursor="hand2",
+        b = Pill(
+            parent, text, font=(FONT, 11, "bold"), fg=fg,
+            fill=CARD, outline=LINE, radius=8, padx=11, pady=1,
+            bg=parent["bg"], cmd=cmd,
         )
         b.pack(side="left", padx=(0, 6))
-        b.bind("<Enter>", lambda e: b.config(bg=HOVER))
-        b.bind("<Leave>", lambda e: b.config(bg=CARD2))
         return b
 
     @staticmethod
@@ -878,13 +1037,14 @@ class Dashboard:
         self._refresh_nonwork()
 
     # ----- 비업무(일시정지) 기록 탭 -----
+    # 방식 라벨은 태그와 같은 파스텔 알약 (배경, 글자) 으로 그린다.
     NW_METHOD_COLORS = {
-        "idle": BAR_TODAY,        # 자리비움 - 호박색
-        "lock": BAR_WORK,         # 화면잠금 - 파랑
-        "screensaver": VAC,       # 화면보호기 - 보라
-        "manual_pause": NW_PAUSE,  # 수동 일시정지 - 초록
-        "manual": NW_MANUAL,      # 수기 추가 - 청회색
-        "settings_change": SUB,
+        "idle": TAG_COLORS[6],          # 자리비움 - 오커
+        "lock": TAG_COLORS[2],          # 화면잠금 - 청회색
+        "screensaver": TAG_COLORS[3],   # 화면보호기 - 인디고
+        "manual_pause": TAG_COLORS[0],  # 수동 일시정지 - 그린
+        "manual": TAG_COLORS[7],        # 수기 추가 - 그레이그린
+        "settings_change": TAG_COLORS[7],
     }
 
     def _build_nonwork(self, parent):
@@ -934,12 +1094,12 @@ class Dashboard:
         except tk.TclError:
             pass
         style.configure(
-            "NW.Vertical.TScrollbar", background=CARD2, troughcolor=BG,
+            "NW.Vertical.TScrollbar", background=GRID, troughcolor=BG,
             bordercolor=BG, arrowcolor=SUB, relief="flat",
         )
         style.map(
             "NW.Vertical.TScrollbar",
-            background=[("active", HOVER)], arrowcolor=[("active", FG)],
+            background=[("active", SUB)], arrowcolor=[("active", FG)],
         )
         self.nw_scroll = ttk.Scrollbar(
             wrap, orient="vertical", command=self.nw_canvas.yview,
@@ -1036,9 +1196,9 @@ class Dashboard:
         self._nw_focus_in(entry)
 
     def _nw_method(self, reason):
+        """(라벨, (칩 배경, 글자색))."""
         label = S.NONWORK_REASON_LABELS.get(reason, "기타")
-        color = self.NW_METHOD_COLORS.get(reason, SUB)
-        return label, color
+        return label, self.NW_METHOD_COLORS.get(reason, TAG_COLORS[7])
 
     def _nw_note_text(self, stop_id) -> str:
         """placeholder 표시 중이면 실제 값이 아니므로 빈 문자열로 취급한다."""
@@ -1080,9 +1240,11 @@ class Dashboard:
         # 한 구간 = 한 줄(grid). 열 너비는 각 열의 가장 넓은 칸에 자동으로 맞춰져
         # 행끼리 정렬되며, 한글이라도 잘리지 않는다. 사유 입력란(열 3)만 늘어난다.
         sid = p["stop_id"]
-        label, color = self._nw_method(p["reason"])
-        self._label(self.nw_list, label, fg=color, size=10, bold=True, bg=BG).grid(
-            row=r, column=0, sticky="w", padx=(0, 12), pady=3)
+        label, (chip_bg, chip_fg) = self._nw_method(p["reason"])
+        Pill(
+            self.nw_list, label, font=(FONT, 9, "bold"), fg=chip_fg,
+            fill=chip_bg, outline=chip_bg, radius=99, padx=10, pady=2, bg=BG,
+        ).grid(row=r, column=0, sticky="w", padx=(0, 12), pady=3)
         tlbl = self._label(self.nw_list, fg=FG, size=10, bg=BG)
         tlbl.grid(row=r, column=1, sticky="w", padx=(0, 12), pady=3)
         dlbl = self._label(self.nw_list, fg=SUB, size=10, bold=True, bg=BG)
@@ -1095,9 +1257,10 @@ class Dashboard:
         self.nw_placeholder[sid] = is_ph
         self.nw_saved[sid] = note   # 로드된 값 = 마지막 저장값(피드백 판정 기준)
         ent = tk.Entry(
-            self.nw_list, textvariable=var, bg=CARD2,
+            self.nw_list, textvariable=var, bg=CARD,
             fg=(SUB if is_ph else FG), insertbackground=FG,
-            relief="flat", font=self.nw_font,
+            relief="flat", bd=0, font=self.nw_font,
+            highlightthickness=1, highlightbackground=LINE, highlightcolor=ACCENT,
         )
         ent.grid(row=r, column=3, sticky="ew", pady=3, ipady=3)
         ent.bind("<FocusIn>", lambda e, s=sid, en=ent: self._nw_entry_focus_in(s, en))
@@ -1113,15 +1276,15 @@ class Dashboard:
             self._nw_del_btn(r, sid)
 
     def _nw_del_btn(self, r, sid):
-        b = tk.Button(
-            self.nw_list, text="삭제", font=(FONT, 9),
-            bg=BG, fg=SUB, activebackground=CARD2, activeforeground=WARN,
-            relief="flat", bd=0, padx=8, pady=1, cursor="hand2", takefocus=0,
-            command=lambda: self._delete_nw(sid),
+        """todo 앱의 `.btn.danger-ghost`: 테두리 없이 흐리게, 올리면 클레이 레드."""
+        b = Pill(
+            self.nw_list, "삭제", font=(FONT, 9), fg=SUB,
+            fill=BG, outline=None, radius=8, padx=9, pady=3, bg=BG,
+            cmd=lambda: self._delete_nw(sid), hover_fill="#F0DFDD",
         )
         b.grid(row=r, column=4, sticky="e", padx=(10, 0), pady=3)
-        b.bind("<Enter>", lambda e: b.config(fg=WARN))
-        b.bind("<Leave>", lambda e: b.config(fg=SUB))
+        b.bind("<Enter>", lambda e: b.config(fg=WARN), add="+")
+        b.bind("<Leave>", lambda e: b.config(fg=SUB), add="+")
 
     def _delete_nw(self, stop_id):
         """비업무 구간을 지워 그 시간을 업무시간으로 되돌린다 (현황에도 반영)."""
@@ -1223,8 +1386,10 @@ class Dashboard:
 
     # ----- 설정 레이아웃 -----
     def _build_settings(self, parent):
+        # 설정 탭은 세 탭 중 가장 길어서 화면 높이 상한(screenheight-80)에 아슬아슬하다.
+        # 위아래 여백을 조금 줄여 내보내기 카드까지 화면 안에 들어오게 한다.
         root = tk.Frame(parent, bg=BG)
-        root.pack(fill="both", expand=True, padx=16, pady=10)
+        root.pack(fill="both", expand=True, padx=16, pady=7)
 
         self._label(
             root, "시간 카운팅 방식", fg=FG, size=13, bold=True, bg=BG
@@ -1276,7 +1441,7 @@ class Dashboard:
 
         # 알림 (카운팅 방식은 아니지만 같은 편집 버튼으로 저장한다)
         self._label(root, "알림", fg=FG, size=13, bold=True, bg=BG).pack(
-            anchor="w", pady=(8, 6)
+            anchor="w", pady=(4, 4)
         )
         goal_card = self._card(root)
         self._setting_check(
@@ -1295,8 +1460,12 @@ class Dashboard:
         # 편집 / 저장 / 취소 버튼 바
         btnbar = tk.Frame(root, bg=BG)
         btnbar.pack(fill="x", pady=(6, 0))
-        self.btn_edit = self._settings_btn(btnbar, "편집", self._enter_edit, ACCENT)
-        self.btn_save = self._settings_btn(btnbar, "저장", self._save_edit, GOOD)
+        self.btn_edit = self._settings_btn(
+            btnbar, "편집", self._enter_edit, ACCENT, primary=True
+        )
+        self.btn_save = self._settings_btn(
+            btnbar, "저장", self._save_edit, GOOD, primary=True
+        )
         self.btn_cancel = self._settings_btn(btnbar, "취소", self._cancel_edit, SUB)
         self.lbl_saved = self._label(btnbar, fg=SUB, size=9, bg=BG)
         self.lbl_saved.pack(side="right")
@@ -1309,7 +1478,7 @@ class Dashboard:
         # ----- 데이터 내보내기 -----
         self._label(
             root, "데이터 내보내기", fg=FG, size=13, bold=True, bg=BG
-        ).pack(anchor="w", pady=(16, 3))
+        ).pack(anchor="w", pady=(11, 3))
         self._label(
             root, "선택한 달의 평일(월~금) 기록만 CSV(엑셀)로 저장합니다. 토·일과 기록 없는 날은 제외됩니다.",
             fg=SUB, size=9, bg=BG,
@@ -1324,7 +1493,9 @@ class Dashboard:
         self.lbl_export_month = self._label(exrow, fg=FG, size=12, bold=True)
         self.lbl_export_month.pack(side="left", padx=(2, 2))
         self.btn_export_next = self._adj_btn(exrow, "▶", lambda: self._export_change_month(1), FG)
-        self.btn_export = self._settings_btn(exrow, "내보내기", self._do_export, ACCENT)
+        self.btn_export = self._settings_btn(
+            exrow, "내보내기", self._do_export, ACCENT, primary=True
+        )
         self.btn_export.pack(side="left", padx=(12, 0))
 
         # 저장 위치: meta 'export_dir' 에 유지, 없으면 기본 폴더
@@ -1414,11 +1585,18 @@ class Dashboard:
         except Exception:
             pass
 
-    def _settings_btn(self, parent, text, cmd, fg):
-        return tk.Button(
-            parent, text=text, command=cmd, font=(FONT, 10, "bold"),
-            bg=CARD2, fg=fg, activebackground=HOVER, activeforeground=fg,
-            relief="flat", bd=0, padx=16, pady=5, cursor="hand2",
+    def _settings_btn(self, parent, text, cmd, fg, primary=False):
+        """설정/내보내기용 버튼. primary 는 todo 앱 `.btn.primary`(틸 채움)."""
+        if primary:
+            return Pill(
+                parent, text, font=(FONT, 10, "bold"), fg=ON_ACCENT,
+                fill=ACCENT, outline=ACCENT, radius=8, padx=16, pady=5,
+                bg=parent["bg"], cmd=cmd, hover_fill=ACCENT_INK,
+            )
+        return Pill(
+            parent, text, font=(FONT, 10, "bold"), fg=fg,
+            fill=CARD, outline=LINE, radius=8, padx=16, pady=5,
+            bg=parent["bg"], cmd=cmd,
         )
 
     def _setting_check(self, card, var, title, desc):
@@ -1552,14 +1730,15 @@ class Dashboard:
         return "active", ""
 
     def _status(self, state, label):
+        """상태 칩의 (글자, 글자색, 칩 배경). 색은 태그 파스텔과 같은 계열."""
         # '수동 일시정지'처럼 라벨에 이미 일시정지가 들어있으면 덧붙이지 않는다
         paused = f"■ {label}" if label.endswith("일시정지") else f"■ {label} (일시정지)"
         return {
-            "none": ("기록 없음", SUB),
-            "active": ("● 업무 중", GOOD),
-            "paused": (paused, TODAY),
-            "ended": ("■ 퇴근 / 종료", SUB),
-            "stale": ("■ 기록 멈춤 · 트레이 앱 확인", WARN),
+            "none": ("기록 없음", SUB, CARD2),
+            "active": ("● 업무 중", ACCENT_INK, ACCENT_SOFT),
+            "paused": (paused, "#85683B", "#EFE6D6"),
+            "ended": ("■ 퇴근 / 종료", "#5A695F", "#E3E8E3"),
+            "stale": ("■ 기록 멈춤 · 트레이 앱 확인", "#8C5450", "#F0DFDD"),
         }[state]
 
     # ----- 값만 갱신 (깜빡임 없음) -----
@@ -1571,8 +1750,8 @@ class Dashboard:
             text=f"{today:%Y년 %m월 %d일} ({WEEKDAY[today.weekday()]})"
         )
         state, state_label = self._activity_state(last, last_active)
-        stxt, scol = self._status(state, state_label)
-        self.lbl_status.config(text=stxt, fg=scol)
+        stxt, scol, sfill = self._status(state, state_label)
+        self.lbl_status.set_style(text=stxt, fg=scol, fill=sfill, outline=None)
 
         today_adj = adjusts.get(today, 0)
         today_leave = leaves.get(today)
@@ -1628,10 +1807,13 @@ class Dashboard:
                 fill=(TODAY if is_today else SUB),
             )
             w = int(BAR_MAX * min(1.0, sec / scale))
-            self.chart.coords(bar_id, BAR_X0, y - 8, BAR_X0 + max(w, 0), y + 8)
             bar_fill = LEAVE_COLORS.get(leave) or (BAR_TODAY if is_today else BAR_WORK)
+            # 폭이 바뀔 때마다 그 폭의 둥근 막대 이미지를 만든다(캐시됨).
+            # itemconfig 는 이미지 이름만 들고 있으므로 파이썬 참조를 따로 붙든다.
+            self._bar_imgs[i] = round_img(max(w, 1), BAR_H, BAR_R, bar_fill, bg=CARD)
             self.chart.itemconfig(
-                bar_id, fill=bar_fill, state=("normal" if sec > 0 else "hidden"),
+                bar_id, image=self._bar_imgs[i],
+                state=("normal" if sec > 0 else "hidden"),
             )
             if leave:
                 vtext, vcol = f"{S.LEAVE_LABELS[leave]} {S.fmt_hm(sec)}", bar_fill
@@ -1643,11 +1825,15 @@ class Dashboard:
             btn = self.leave_btns[i]
             label = f"{WEEKDAY[d.weekday()]} {d:%m.%d}"
             if leave:
-                col = LEAVE_COLORS[leave]
-                btn.config(text=f"{label}\n{S.LEAVE_LABELS[leave]}",
-                           fg=BG, bg=col, activebackground=col)
+                btn.set_style(
+                    text=f"{label}\n{S.LEAVE_LABELS[leave]}",
+                    fg=LEAVE_COLORS[leave], fill=LEAVE_SOFT[leave],
+                    outline=LEAVE_COLORS[leave],
+                )
             else:
-                btn.config(text=f"{label}\n근무", fg=SUB, bg=CARD2, activebackground=HOVER)
+                btn.set_style(
+                    text=f"{label}\n근무", fg=SUB, fill=CARD2, outline=LINE,
+                )
 
         worked_days = sum(1 for s in day_secs if s > 0)
         avg = week_total / worked_days if worked_days else 0
