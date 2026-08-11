@@ -72,6 +72,12 @@ NONWORK_REASON_LABELS = {
     MANUAL_REASON: "수기 추가",
 }
 
+# 수기 비업무를 추가할 때 고르는 사유 태그 (meta 'nonwork_tags', 줄바꿈 구분).
+# 고른 태그는 그대로 그 구간의 사유(nwnote:)로 저장된다.
+NONWORK_TAGS_KEY = "nonwork_tags"
+DEFAULT_NONWORK_TAGS = ("식사", "휴식", "외출", "개인용무", "회의")
+TAG_MAX_LEN = 12
+
 
 def _coerce_setting(key: str, raw: str):
     """meta 에 저장된 문자열을 기본값 타입에 맞게 변환."""
@@ -283,6 +289,36 @@ class Storage:
         넘기는 adjust_sec 은 항상 이 함수의 값이어야 두 경로가 중복/누락 없이 합쳐진다.
         """
         return self.manual_nonwork_seconds(day) + self.get_adjust_seconds(day)
+
+    # ----- 사유 태그 (수기 비업무 추가용) -----
+    def get_nonwork_tags(self) -> list:
+        """저장된 태그 목록. 한 번도 저장한 적 없으면 기본 태그를 준다.
+
+        (빈 문자열로 저장돼 있으면 '사용자가 다 지운 것'이므로 빈 목록 그대로.)
+        """
+        v = self.get_meta(NONWORK_TAGS_KEY)
+        if v is None:
+            return list(DEFAULT_NONWORK_TAGS)
+        return [t.strip() for t in v.split("\n") if t.strip()]
+
+    def set_nonwork_tags(self, tags) -> list:
+        """순서를 유지하며 중복/빈 값을 걸러 저장하고, 저장된 목록을 반환."""
+        clean, seen = [], set()
+        for t in tags:
+            t = str(t).strip()[:TAG_MAX_LEN]
+            if t and t not in seen:
+                seen.add(t)
+                clean.append(t)
+        self.set_meta(NONWORK_TAGS_KEY, "\n".join(clean))
+        return clean
+
+    def add_nonwork_tag(self, tag: str) -> list:
+        return self.set_nonwork_tags(self.get_nonwork_tags() + [tag])
+
+    def remove_nonwork_tag(self, tag: str) -> list:
+        return self.set_nonwork_tags(
+            [t for t in self.get_nonwork_tags() if t != tag]
+        )
 
     # ----- 수기로 추가한 비업무 구간 -----
     def add_manual_nonwork(self, day: date, seconds: int, note: str = "") -> str:

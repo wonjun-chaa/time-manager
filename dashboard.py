@@ -456,9 +456,6 @@ class Dashboard:
                 self.lbl_last_note.config(height=1)
                 self.lbl_last_note.pack(anchor="w")
 
-        # 비업무시간 수기 보정 (오늘)
-        self._build_adjust(card)
-
         # 주간 카드
         wcard = self._card(root)
         self.lbl_week_range = self._label(wcard, fg=SUB, size=10)
@@ -570,21 +567,152 @@ class Dashboard:
             w.bind("<Leave>", lambda e: hover(False))
         return extra, toggle
 
-    # ----- 비업무시간 수기 보정 -----
-    def _build_adjust(self, card):
-        self.lbl_adjust, self._adjust_toggle = self._collapsible(
-            card, "비업무시간 수기 보정", self._build_adjust_body
-        )
+    # ----- 비업무시간 수기 보정 (비업무 탭) -----
+    def _build_adjust(self, parent):
+        """비업무 탭 상단의 보정 카드 (접기/펴기 없이 항상 펼쳐진 상태)."""
+        card = self._card(parent)
+        head = tk.Frame(card, bg=CARD)
+        head.pack(fill="x")
+        self._label(
+            head, "비업무시간 수기 보정", fg=FG, size=10, bold=True
+        ).pack(side="left")
+        self.lbl_adjust = self._label(head, fg=TODAY, size=9, bold=True)
+        self.lbl_adjust.pack(side="right")
 
-    def _build_adjust_body(self, body):
-        ctl = tk.Frame(body, bg=CARD)
-        ctl.pack(fill="x", pady=(10, 2))
+        ctl = tk.Frame(card, bg=CARD)
+        ctl.pack(fill="x", pady=(8, 0))
         self.adjust_stepper = Stepper(ctl, value=10, lo=1, hi=600)
         self.adjust_stepper.frame.pack(side="left")
-        self._label(ctl, "분", fg=SUB, size=9).pack(side="left", padx=(6, 10))
-        self._adj_btn(ctl, "− 비업무 빼기", lambda: self._apply_adjust(-1), ACCENT)
-        self._adj_btn(ctl, "＋ 비업무 추가", lambda: self._apply_adjust(+1), TODAY)
-        self._adj_btn(ctl, "초기화", self._reset_adjust, SUB)
+        self._label(ctl, "분", fg=SUB, size=9).pack(side="left", padx=(6, 12))
+        # 글자 없이 기호만 (크고 굵게) - 왼쪽 － 빼기, 오른쪽 ＋ 추가
+        self._sym_btn(ctl, "－", lambda: self._apply_adjust(-1), ACCENT)
+        self._sym_btn(ctl, "＋", lambda: self._apply_adjust(+1), TODAY)
+        self._adj_btn(
+            ctl, "초기화", self._reset_adjust, SUB
+        ).pack_configure(padx=(12, 6))
+        # 한도에 걸려 적용하지 못했을 때 이유를 알려 주는 자리 (잠시 후 사라짐)
+        self.lbl_adj_msg = self._label(ctl, fg=WARN, size=9)
+        self.lbl_adj_msg.pack(side="left")
+        self._adj_msg_after = None
+
+        self._build_tags(card)
+
+    # ----- 사유 태그 (＋ 로 추가할 때 그대로 사유가 된다) -----
+    def _build_tags(self, card):
+        row = tk.Frame(card, bg=CARD)
+        row.pack(fill="x", pady=(8, 0))
+        self._label(row, "사유 태그", fg=SUB, size=9).pack(side="left", padx=(0, 8))
+        self.tag_box = tk.Frame(row, bg=CARD)
+        self.tag_box.pack(side="left")
+        self._label(
+            row, "우클릭으로 태그 삭제", fg=SUB, size=8
+        ).pack(side="right")
+
+        # 새 태그 입력줄 - ＋ 칩을 누를 때만 보인다
+        self.tag_new = tk.Frame(card, bg=CARD)
+        self.tag_var = tk.StringVar()
+        self.tag_entry = tk.Entry(
+            self.tag_new, textvariable=self.tag_var, bg=CARD2, fg=FG,
+            insertbackground=FG, relief="flat", font=self.nw_font, width=14,
+        )
+        self.tag_entry.pack(side="left", ipady=3)
+        self.tag_entry.bind("<Return>", lambda e: self._add_tag())
+        self.tag_entry.bind("<Escape>", lambda e: self._toggle_tag_entry(False))
+        # 한글 조합 폰트를 입력란 폰트에 맞춘다 (사유 입력란과 같은 처리)
+        self.tag_entry.bind("<FocusIn>", lambda e: self._nw_focus_in(self.tag_entry))
+        self.tag_entry.bind("<Key>", lambda e: self._nw_focus_in(self.tag_entry))
+        self._adj_btn(self.tag_new, "추가", self._add_tag, GOOD).pack_configure(
+            padx=(6, 6)
+        )
+        self._adj_btn(self.tag_new, "취소", lambda: self._toggle_tag_entry(False), SUB)
+
+        self._nw_tag = None      # 선택된 태그 (None = 사유 없이 추가)
+        self._tags = []
+        self._render_tags()
+
+    def _render_tags(self, tags=None):
+        if tags is None:
+            st = S.Storage()
+            try:
+                tags = st.get_nonwork_tags()
+            finally:
+                st.close()
+        self._tags = tags
+        if self._nw_tag not in tags:
+            self._nw_tag = None
+        for w in self.tag_box.winfo_children():
+            w.destroy()
+        for t in tags:
+            self._tag_chip(t)
+        plus = tk.Label(
+            self.tag_box, text="＋", font=(FONT, 10, "bold"),
+            bg=CARD2, fg=ACCENT, padx=7, pady=2, cursor="hand2",
+        )
+        plus.pack(side="left", padx=(0, 4))
+        plus.bind("<Button-1>", lambda e: self._toggle_tag_entry())
+        if getattr(self, "_active_tab", None) == "nonwork":
+            self._refit_height()   # 태그가 늘어 줄 폭/높이가 바뀌면 창도 맞춘다
+
+    def _tag_chip(self, tag):
+        sel = (tag == self._nw_tag)
+        lb = tk.Label(
+            self.tag_box, text=tag, font=(FONT, 9, "bold"),
+            bg=(NW_MANUAL if sel else CARD2), fg=(BG if sel else SUB),
+            padx=8, pady=2, cursor="hand2",
+        )
+        lb.pack(side="left", padx=(0, 4))
+        lb.bind("<Button-1>", lambda e, t=tag: self._select_tag(t))
+        lb.bind("<Button-3>", lambda e, t=tag: self._delete_tag(t))
+        if not sel:
+            lb.bind("<Enter>", lambda e: lb.config(bg=HOVER, fg=FG))
+            lb.bind("<Leave>", lambda e: lb.config(bg=CARD2, fg=SUB))
+
+    def _select_tag(self, tag):
+        """같은 태그를 다시 누르면 선택 해제 (사유 없이 추가)."""
+        self._nw_tag = None if self._nw_tag == tag else tag
+        self._render_tags(self._tags)
+
+    def _toggle_tag_entry(self, show=None):
+        if show is None:
+            show = not self.tag_new.winfo_ismapped()
+        if show:
+            self.tag_new.pack(fill="x", pady=(6, 0))
+            self.tag_entry.focus_set()
+        else:
+            self.tag_var.set("")
+            self.tag_new.pack_forget()
+            self.root.focus()
+        if getattr(self, "_active_tab", None) == "nonwork":
+            self._refit_height()
+
+    def _add_tag(self):
+        tag = self.tag_var.get().strip()
+        if not tag:
+            self._toggle_tag_entry(False)
+            return
+        st = S.Storage()
+        try:
+            tags = st.add_nonwork_tag(tag)
+        finally:
+            st.close()
+        self._nw_tag = tag[:S.TAG_MAX_LEN]   # 새로 만든 태그를 바로 선택
+        self._toggle_tag_entry(False)
+        self._render_tags(tags)
+
+    def _delete_tag(self, tag):
+        if not messagebox.askyesno(
+            "태그 삭제",
+            f"'{tag}' 태그를 목록에서 지울까요?\n\n"
+            "이미 입력된 사유는 그대로 남습니다.",
+            parent=self.root,
+        ):
+            return
+        st = S.Storage()
+        try:
+            tags = st.remove_nonwork_tag(tag)
+        finally:
+            st.close()
+        self._render_tags(tags)
 
     # ----- 출장 · 휴가 · 반차 표시 -----
     def _build_leave(self, card):
@@ -641,6 +769,22 @@ class Dashboard:
         b.pack(side="left", padx=(0, 6))
         return b
 
+    def _sym_btn(self, parent, text, cmd, fg):
+        """기호만 있는 버튼 (－ / ＋).
+
+        버튼 크기는 다른 글자 버튼(`_adj_btn`)과 같게 두고, 기호만 조금 키워
+        (pady 를 줄여 높이를 맞춘다) 눈에 띄게 한다.
+        """
+        b = tk.Button(
+            parent, text=text, command=cmd, font=(FONT, 11, "bold"),
+            bg=CARD2, fg=fg, activebackground=HOVER, activeforeground=fg,
+            relief="flat", bd=0, padx=10, pady=2, cursor="hand2",
+        )
+        b.pack(side="left", padx=(0, 6))
+        b.bind("<Enter>", lambda e: b.config(bg=HOVER))
+        b.bind("<Leave>", lambda e: b.config(bg=CARD2))
+        return b
+
     @staticmethod
     def _fmt_adjust(sec: int) -> str:
         if sec == 0:
@@ -649,55 +793,87 @@ class Dashboard:
         return f"{sign}{S.fmt_hm(abs(sec))}"
 
     def _apply_adjust(self, sign: int):
-        """오늘의 비업무 보정. 추가분은 비업무 탭에 보이도록 수기 구간으로 남긴다."""
+        """지금 보고 있는 날짜의 비업무 보정.
+
+        추가분은 목록에 한 줄로 보이도록 수기 구간으로 남기고, 선택한 사유
+        태그가 있으면 그 구간의 사유로 함께 저장한다.
+        """
         minutes = self.adjust_stepper.value()
         delta = sign * minutes * 60
-        today = date.today()
+        day = self._nw_day
+        tag = self._nw_tag or ""
+        msg = ""
         st = S.Storage()
         try:
             ivs = st.intervals()
-            base_work = S.seconds_for_day(ivs, today)
-            stay = S.stay_seconds(ivs, today, st.ongoing_pause_now(today))
+            base_work = S.seconds_for_day(ivs, day)
+            stay = S.stay_seconds(ivs, day, st.ongoing_pause_now(day))
             base_nonwork = max(0.0, stay - base_work)
             # 비업무 = base_nonwork + 보정 이 [0, 체류] 안에 머물도록 총 보정을 제한.
             #   ⇒ 보정 ∈ [-비업무(다 뺄 수 있는 한도), +실업무(다 더할 수 있는 한도)]
             lo = -int(round(base_nonwork))
             hi = int(round(base_work))
-            total = st.total_adjust_seconds(today)
-            applied = max(lo, min(hi, total + delta)) - total
-            if applied > 0:
-                # 추가는 목록에 한 줄로 남겨 사유를 적을 수 있게 한다
-                st.add_manual_nonwork(today, applied)
-            elif applied < 0:
+            total = st.total_adjust_seconds(day)
+            if not lo <= total + delta <= hi:
+                # 한도를 넘으면 남은 만큼만 슬쩍 넣지 않는다. 예전에는 자투리가
+                # 그대로 적용돼 10분을 눌렀는데 '4분'·'10초' 짜리 구간이 생겼다.
+                msg = self._adjust_limit_msg(delta, hi - total if delta > 0
+                                             else total - lo)
+            elif delta > 0:
+                # 추가는 목록에 한 줄로 남겨 사유(태그)를 붙일 수 있게 한다
+                st.add_manual_nonwork(day, delta, tag)
+            elif delta < 0:
                 # 빼기는 최근 수기 구간부터 지우고, 모자란 만큼만 음수 보정으로
-                left = st.reduce_manual_nonwork(today, -applied)
+                left = st.reduce_manual_nonwork(day, -delta)
                 if left:
-                    st.add_adjust_seconds(today, -left)
+                    st.add_adjust_seconds(day, -left)
         finally:
             st.close()
+        self._adj_flash(msg)
         self._refresh()
         self._refresh_nonwork()
 
+    @staticmethod
+    def _adjust_limit_msg(delta: int, room: int) -> str:
+        room = max(0, int(room))
+        if delta > 0:
+            return ("더 옮길 업무시간이 없습니다" if room == 0 else
+                    f"남은 업무시간 {S.fmt_dur(room)}까지만 추가할 수 있어요")
+        return ("뺄 비업무시간이 없습니다" if room == 0 else
+                f"남은 비업무 {S.fmt_dur(room)}까지만 뺄 수 있어요")
+
+    def _adj_flash(self, text: str):
+        """보정 한도 안내를 잠깐 띄운다 (빈 문자열이면 즉시 지움)."""
+        self.lbl_adj_msg.config(text=text)
+        if self._adj_msg_after:
+            self.root.after_cancel(self._adj_msg_after)
+            self._adj_msg_after = None
+        if text:
+            self._adj_msg_after = self.root.after(
+                4000, lambda: self.lbl_adj_msg.config(text="")
+            )
+
     def _reset_adjust(self):
-        today = date.today()
+        day = self._nw_day
         st = S.Storage()
         try:
-            has_manual = st.manual_nonwork_seconds(today) > 0
+            has_manual = st.manual_nonwork_seconds(day) > 0
         finally:
             st.close()
         if has_manual and not messagebox.askyesno(
             "보정 초기화",
-            "오늘 보정을 모두 되돌릴까요?\n\n"
+            f"{day:%m월 %d일} 보정을 모두 되돌릴까요?\n\n"
             "수기로 추가한 비업무 구간과 그 사유도 함께 지워집니다.",
             parent=self.root,
         ):
             return
         st = S.Storage()
         try:
-            st.set_adjust_seconds(today, 0)
-            st.clear_manual_nonwork(today)
+            st.set_adjust_seconds(day, 0)
+            st.clear_manual_nonwork(day)
         finally:
             st.close()
+        self._adj_flash("")
         self._refresh()
         self._refresh_nonwork()
 
@@ -718,6 +894,11 @@ class Dashboard:
         # 조회 날짜 (기본 오늘). ◀/▶ 로 이동, 오늘 이후로는 못 감.
         self._nw_day = date.today()
 
+        # 사유/태그 입력란 전용 폰트(명시적 객체) — 한글 조합 폰트 지정에도 쓴다.
+        # (보정 카드의 태그 입력란도 같은 폰트를 쓰므로 먼저 만든다)
+        self.nw_font = tkfont.Font(family=FONT, size=10)
+        self._nw_ime_px = self.nw_font.metrics("linespace")  # 조합 폰트 높이(px)
+
         head = tk.Frame(root, bg=BG)
         head.pack(fill="x", pady=(0, 10))
         nav = tk.Frame(head, bg=BG)
@@ -737,6 +918,9 @@ class Dashboard:
         self.lbl_nw_saved = self._label(head, fg=GOOD, size=9, bold=True, bg=BG)
         self.lbl_nw_saved.pack(side="right", padx=(0, 12))
         self._nw_saved_after = None
+
+        # 수기 보정 (＋ 추가분은 아래 목록에 한 줄로 나타난다)
+        self._build_adjust(root)
 
         # 스크롤 영역: 캔버스 + 내부 frame(=nw_list). 목록 높이가 상한을 넘을 때만
         # 스크롤하고 스크롤바를 보인다. 그 이하면 기존처럼 내용 높이 그대로.
@@ -777,10 +961,6 @@ class Dashboard:
         self.nw_canvas.bind(
             "<Leave>", lambda e: self.nw_canvas.unbind_all("<MouseWheel>")
         )
-
-        # 사유 입력란 전용 폰트(명시적 객체) — 조합 폰트 지정에도 사용
-        self.nw_font = tkfont.Font(family=FONT, size=10)
-        self._nw_ime_px = self.nw_font.metrics("linespace")  # 조합 폰트 높이(px)
 
         # stop_id 별 위젯/값 추적 (사유 메모 보존 + 진행 중 구간 제자리 갱신)
         self.nw_notes = {}       # stop_id -> StringVar
@@ -1007,8 +1187,14 @@ class Dashboard:
         try:
             periods = st.nonwork_periods(day)
             notes = {p["stop_id"]: st.get_nonwork_note(p["stop_id"]) for p in periods}
+            adj = st.total_adjust_seconds(day)
         finally:
             st.close()
+
+        # 보정 표시는 보고 있는 날짜 기준 (보정 버튼도 그 날짜에 적용된다)
+        self.lbl_adjust.config(
+            text="" if adj == 0 else f"보정 {self._fmt_adjust(adj)}"
+        )
 
         total = sum(p["seconds"] for p in periods)
         self.lbl_nw_total.config(text=f"합계 {S.fmt_dur(total)}" if periods else "")
@@ -1413,9 +1599,6 @@ class Dashboard:
         )
         self.today_cells["비업무"].config(
             text=S.fmt_hm(today_nonwork) if first else "-"
-        )
-        self.lbl_adjust.config(
-            text="" if today_adj == 0 else f"보정 {self._fmt_adjust(today_adj)}"
         )
 
         monday, _ = S.week_range(today)
